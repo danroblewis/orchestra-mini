@@ -48,12 +48,13 @@ def _health(project) -> dict:
         return {}
 
 
-def items(project, page: int = 0, n: int = 25, closed: bool = False) -> dict:
-    found = Items(project, Events.for_project(project)).list(closed=closed)
-    rows = [{k: i.get(k) for k in ("subject", "type", "first", "last", "done")} | {
+def items(project, page: int = 0, n: int = 25, closed: bool = False, kind: str | None = None) -> dict:
+    store = Items(project, Events.for_project(project))
+    found = store.list(closed=closed, kind=kind)
+    rows = [{k: i.get(k) for k in ("subject", "kind", "type", "first", "last", "done")} | {
         "waiting_on": (i.get("fields") or {}).get("waiting_on"), "title": (i.get("fields") or {}).get("title"),
         "events": len(i.get("events") or [])} for i in found[page * n:(page + 1) * n]]
-    return {"items": rows, "page": page, "n": n, "total": len(found), "closed": closed}
+    return {"items": rows, "page": page, "n": n, "total": len(found), "closed": closed, "kind": kind, "kinds": store.kinds()}
 
 
 def item(project, subject: str) -> dict | None:

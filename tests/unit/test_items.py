@@ -54,3 +54,13 @@ def test_a_reducer_replaces_the_fold(make_project):
     items = Items(project, events)
     assert items.get("task/1")["count"] == 1 and len(items.get("task/1")["events"]) == 1
     assert "count" not in items.get("other")
+
+
+def test_an_items_kind_is_its_first_events_type_less_the_verb_or_its_explicit_kind():
+    from orchestra.items import fold
+    pr = fold("o/r/pull/3", [{"type": "github.pr.opened", "time": "2026-11-05T10:00:00Z", "data": {"title": "x"}},
+                             {"type": "github.pr.review_submitted", "time": "2026-11-05T11:00:00Z", "data": {}}])
+    assert pr["kind"] == "github.pr"
+    task = fold("t/1", [{"type": "work.started", "kind": "task", "time": "2026-11-05T10:00:00Z", "data": {}}])
+    assert task["kind"] == "task"
+    assert fold("x", [{"type": "orchestra.prediction.made", "time": "2026-11-05T10:00:00Z"}])["kind"] is None

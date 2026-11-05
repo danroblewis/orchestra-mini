@@ -144,10 +144,12 @@ def cmd_items(args) -> int:
             return 1
         print(json.dumps(item, indent=2))
         return 0
-    found = items.list(closed=args.all)
+    found = items.list(closed=args.all, kind=args.kind)
     for i in found[args.page * args.n:(args.page + 1) * args.n]:
         waits = (i.get("fields") or {}).get("waiting_on")
-        print(f"{i['last']}  {i['subject']}  {i['type']}" + ("  done" if i.get("done") else "")
+        title = (i.get("fields") or {}).get("title")
+        print(f"{i['last']}  {i.get('kind') or '?'}  {i['subject']}  {i['type']}" + (f"  {title}" if title else "")
+              + ("  done" if i.get("done") else "")
               + (f"  waits on {waits}" if waits else ""))
     return 0
 
@@ -236,6 +238,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("show", nargs="?", help="show")
     s.add_argument("subject", nargs="?")
     s.add_argument("--all", action="store_true", help="closed ones too")
+    s.add_argument("--kind", help="only this kind (github.pr, jira.issue)")
     s.add_argument("-n", type=int, default=20)
     s.add_argument("--page", type=int, default=0)
     s.set_defaults(fn=cmd_items)

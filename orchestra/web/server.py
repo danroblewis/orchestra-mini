@@ -29,7 +29,7 @@ def views(project):
     """path -> (title, data(query), html(data))."""
     return {
         "/": ("Dashboard", lambda q: data.dashboard(project), pages.dashboard),
-        "/items": ("Items", lambda q: data.items(project, _int(q, "page"), 25, (q.get("closed") or ["0"])[0] == "1"), pages.items),
+        "/items": ("Items", lambda q: data.items(project, _int(q, "page"), 25, (q.get("closed") or ["0"])[0] == "1", (q.get("kind") or [""])[0] or None), pages.items),
         "/machines": ("Machines", lambda q: data.machines(project), pages.machines),
         "/dynamics": ("Dynamics", lambda q: data.dynamics(project), pages.dynamics),
         "/core": ("Core", lambda q: data.core(project), pages.core),

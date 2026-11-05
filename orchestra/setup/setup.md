@@ -27,9 +27,20 @@ Turn what the owner wants Orchestra to see and do into a working setup:
    endpoints (a `/metrics` route, an `npm run` target). Ask only for what you cannot find, and
    only in a sentence.
 3. **Design it for this owner.** Pick the commands, events, items, processes and tools their work
-   needs; name event types `<system>.<noun>.<verb>`; give every event a stable `id` and the time
-   it happened; make each item's subject the thing the work is about (a ticket key, a PR, a task).
-   Prefer few, simple pieces. A flow is which process listens for which events.
+   needs. Prefer few, simple pieces. A flow is which process listens for which events.
+   - **Items are what the owner tracks**, and each has a kind: a GitHub issue and a pull request are
+     different kinds (`github.issue`, `github.pr`), a Jira ticket another (`jira.issue`), the
+     owner's own task another. Decide the kinds first: for each, its subject, its event types and
+     the fields its state needs (title, state, assignee, labels, url, and the text the owner wants).
+   - **A subject names one thing, never two**: write it as the system does, so kinds that share a
+     numbering stay apart (`owner/repo/issues/1`, `owner/repo/pull/3`; GitHub numbers issues and
+     PRs from one sequence), and a ticket key for a ticket (`ABC-123`).
+   - **Event types are `<kind>.<verb>`** (`github.pr.opened`, `github.pr.review_submitted`,
+     `github.issue.closed`), so the kind follows from the type; set `kind` on the line only when it
+     can't. Each event's `data` is the change: the fields it sets (latest wins; `null` removes).
+     Keep the keys flat (`title`, `state`), never one nested object.
+   - Every event has a stable `id` (the change's own id, or the subject plus the change's time) and
+     the time it happened, so a re-read never duplicates and history lands in order.
 4. **Write it, then prove it.** Run each script by hand and look at its stdout; run
    `orchestra check` and fix what it reports; run `orchestra run --seconds 30`, then
    `orchestra events`, `orchestra items` and `orchestra metrics`, and fix what is missing or wrong.

@@ -89,6 +89,8 @@ An event command prints one JSON object per line on stdout:
 - `source`: who acted; default the command's name. People are `person.<system>.<account>`.
 - `id`: stable per change; Orchestra drops an event whose id it has. Default: a hash of the line.
 - `time`: when it happened (RFC 3339); default now.
+- `kind`: what the subject is (`github.pr`, `github.issue`, `jira.issue`, `task`); default: the
+  first event's type less its verb (`github.pr.opened` → `github.pr`).
 - `data`: anything; Orchestra never reads it, except for items (section 5).
 - A line `{"type": "orchestra.actor", "source": "person.jira.alice", "data": {"name": "Alice A"}}`
   names an actor for the pages.
@@ -136,8 +138,12 @@ writing to Slack or opening a PR is in the file because the owner put it there.
 
 ## 5. Items
 
-An **item** is everything the bus says about one `subject`, folded into its current state:
+An **item** is everything the bus says about one `subject`, folded into its current state. Each
+item has a **kind**, what it is (section 2's `kind`). Things of different kinds never share a
+subject: a subject names one thing unambiguously, best the way its own system writes it
+(`owner/repo/pull/3`, `owner/repo/issues/1`, `ABC-123`), even where two kinds share a numbering.
 
+- `kind`: the item's kind;
 - `fields`: every key of every event's `data`, the latest event (by `time`, ties by bus order)
   winning; `data` set to `null` removes a key;
 - `type`: the type of the latest event; `first`, `last`: the times of the first and latest events;
@@ -147,8 +153,8 @@ An **item** is everything the bus says about one `subject`, folded into its curr
 
 An optional reducer replaces the fold for subjects matching a pattern: `items: [{match: "task/*",
 command: scripts/task_state.py}]` gets the item's events as JSON lines on stdin and prints its state
-as one JSON object. `orchestra items` lists open items (newest first, paged); `orchestra items
-show <subject>` prints one with its history. The Items page shows them, closed ones hidden unless
+as one JSON object. `orchestra items [--kind K]` lists open items (newest first, paged); `orchestra items
+show <subject>` prints one with its history. The Items page filters by kind, with each kind's count. The Items page shows them, closed ones hidden unless
 asked for, with what each waits on when its state says (`fields.waiting_on`).
 
 ## 6. The model

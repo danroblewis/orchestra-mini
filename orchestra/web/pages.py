@@ -63,18 +63,23 @@ def runs_table(rs: list[dict]) -> str:
 
 
 def items(d: dict) -> str:
-    rows = [[item_link(i["subject"]), e(i["title"]), e(i["type"]), when(i["last"]), e(i["waiting_on"]),
+    rows = [[item_link(i["subject"]), e(i.get("kind") or ""), e(i["title"]), e(i["type"]), when(i["last"]), e(i["waiting_on"]),
              "closed" if i["done"] else "open", e(i["events"])] for i in d["items"]]
-    q = "&closed=1" if d["closed"] else ""
+    kind = d.get("kind")
+    q = ("&closed=1" if d["closed"] else "") + (f"&kind={quote(kind)}" if kind else "")
+    kinds = " · ".join(['<a href="/items">all</a>' if kind else "<b>all</b>"]
+                       + [(f"<b>{e(k)} ({n})</b>" if k == kind else f'<a href="/items?kind={quote(k)}">{e(k)} ({n})</a>')
+                          for k, n in (d.get("kinds") or {}).items()])
     pages = []
     if d["page"] > 0:
         pages.append(f'<a href="/items?page={d["page"] - 1}{q}">newer</a>')
     if (d["page"] + 1) * d["n"] < d["total"]:
         pages.append(f'<a href="/items?page={d["page"] + 1}{q}">older</a>')
-    toggle = '<a href="/items">hide closed</a>' if d["closed"] else '<a href="/items?closed=1">show closed</a>'
+    base = f"/items?kind={quote(kind)}&" if kind else "/items?"
+    toggle = f'<a href="{base}">hide closed</a>' if d["closed"] else f'<a href="{base}closed=1">show closed</a>'
     shown = f'{d["page"] * d["n"] + 1 if d["items"] else 0}-{d["page"] * d["n"] + len(d["items"])} of {d["total"]}'
-    return (f'<p>{shown} {"items" if d["closed"] else "open items"} · {toggle}</p>'
-            + table(["item", "title", "latest", "when", "waits on", "state", "events"], rows, "no items")
+    return (f'<p class="kinds">{kinds}</p><p>{shown} {"items" if d["closed"] else "open items"} · {toggle}</p>'
+            + table(["item", "kind", "title", "latest", "when", "waits on", "state", "events"], rows, "no items")
             + f'<p class="pager">{" · ".join(pages)}</p>')
 
 
@@ -83,7 +88,7 @@ def item(i: dict) -> str:
     hist = table(["when", "type", "source", "data"], [[when(ev.get("time")), e(ev.get("type")), e(ev.get("source")),
                                                        f"<code>{e(json.dumps(ev.get('data')))}</code>"] for ev in i["events"]])
     waits = f'<p>waits on <b>{e(i["fields"]["waiting_on"])}</b></p>' if i["fields"].get("waiting_on") else ""
-    return (f'<p>{"closed" if i["done"] else "open"} · latest {e(i["type"])} at {when(i["last"])}</p>{waits}'
+    return (f'<p><b>{e(i.get("kind") or "")}</b> · {"closed" if i["done"] else "open"} · latest {e(i["type"])} at {when(i["last"])}</p>{waits}'
             f'<section><h2>Fields</h2>{fields}</section><section><h2>History</h2>{hist}</section><p><a href="/items">all items</a></p>')
 
 

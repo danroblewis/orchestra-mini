@@ -25,6 +25,19 @@ from .events import Events, event_time
 DONE = (".completed", ".closed", ".cancelled")
 
 
+def kind_of(events: list[dict]) -> str | None:
+    """What the item is: the first event's explicit ``kind``, else its type less the verb
+    (``github.pr.opened`` is a ``github.pr``); Orchestra's own types (``orchestra.*``) say nothing."""
+    for e in events:
+        if isinstance(e.get("kind"), str) and e["kind"]:
+            return e["kind"]
+    for e in events:
+        parts = str(e.get("type") or "").split(".")
+        if parts[0] != "orchestra" and len(parts) >= 3:
+            return ".".join(parts[:-1])
+    return None
+
+
 def fold(subject: str, events: list[dict]) -> dict:
     evs = sorted(events, key=lambda e: event_time(e) or 0.0)       # stable: ties keep bus order
     fields: dict = {}
@@ -36,7 +49,7 @@ def fold(subject: str, events: list[dict]) -> dict:
                 else:
                     fields[k] = v
     last = evs[-1] if evs else {}
-    return {"subject": subject, "type": last.get("type"), "first": evs[0].get("time") if evs else None,
+    return {"subject": subject, "kind": kind_of(evs), "type": last.get("type"), "first": evs[0].get("time") if evs else None,
             "last": last.get("time"), "done": str(last.get("type", "")).endswith(DONE),
             "fields": fields, "events": evs}
 
@@ -53,7 +66,7 @@ def reduce(project, reducer, subject: str, events: list[dict]) -> dict:
         except ValueError:
             continue
         if isinstance(state, dict):
-            return {k: base[k] for k in ("subject", "events", "first", "last")} | state
+            return {k: base[k] for k in ("subject", "kind", "events", "first", "last")} | state
     log_to(log, f"{subject}: the reducer gave no state ({res.error or res.rc}); the fold is used")
     return base
 
@@ -95,12 +108,21 @@ class Items:
         tmp.replace(self.path)
         return list(new)
 
+    def kinds(self) -> dict[str, int]:
+        """Each kind and how many open items it has."""
+        self.update()
+        out: dict[str, int] = {}
+        for i in self.items.values():
+            if not i.get("done"):
+                out[i.get("kind") or "?"] = out.get(i.get("kind") or "?", 0) + 1
+        return dict(sorted(out.items()))
+
     def get(self, subject: str) -> dict | None:
         self.update()
         return self.items.get(subject)
 
-    def list(self, closed: bool = False) -> list[dict]:
-        """The items, newest first; the closed ones only when asked."""
+    def list(self, closed: bool = False, kind: str | None = None) -> list[dict]:
+        """The items, newest first; the closed ones only when asked; of one kind when given."""
         self.update()
-        out = [i for i in self.items.values() if closed or not i.get("done")]
+        out = [i for i in self.items.values() if (closed or not i.get("done")) and (not kind or i.get("kind") == kind)]
         return sorted(out, key=lambda i: event_time({"time": i.get("last")}) or 0.0, reverse=True)

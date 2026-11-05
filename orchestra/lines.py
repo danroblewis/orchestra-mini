@@ -38,7 +38,7 @@ def event(raw: dict, source: str, default_id: str) -> tuple[dict | None, str | N
     t = raw.get("type")
     if not isinstance(t, str) or not t:
         return None, "no type"
-    for k in ("subject", "source", "id", "time"):
+    for k in ("subject", "source", "id", "time", "kind"):
         if raw.get(k) is not None and not isinstance(raw[k], str):
             return None, f"{k} is not a string"
     try:
@@ -46,6 +46,8 @@ def event(raw: dict, source: str, default_id: str) -> tuple[dict | None, str | N
                       time=raw.get("time"), id=raw.get("id") or default_id)
     except (TypeError, ValueError) as e:
         return None, str(e)
+    if raw.get("kind"):
+        ev["kind"] = raw["kind"]             # what the subject is (github.pr, jira.issue): items say it
     return ev, None
 
 
