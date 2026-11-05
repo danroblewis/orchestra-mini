@@ -21,6 +21,7 @@ orchestra init         # the state directory, ~/.orchestra/<project>/
 orchestra setup        # a Claude Code session that asks what you want, then writes and tests
                        # orchestra.yaml, its scripts and its prompts; or: orchestra setup "watch our Jira"
 orchestra run --web    # everything, and the pages; Ctrl-C stops it
+orchestra reset        # clear the data and start over (keeps the config); --yes to do it
 ```
 
 The config stays short and readable, so you can edit it by hand too. Secrets come from environment variables named in the config (`token_env: JIRA_TOKEN`). An agent

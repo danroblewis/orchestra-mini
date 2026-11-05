@@ -36,6 +36,38 @@ def cmd_init(args) -> int:
     return 0
 
 
+KEEP = {"orchestra.yaml", "orchestra.yml", "orchestra.json", "web.token", "events.token"}
+
+
+def cmd_reset(args) -> int:
+    """Clear the project's data (the bus, metrics, items, runs, logs, the model), keeping its
+    config overlay and tokens. Refused while ``orchestra run`` runs."""
+    import shutil
+    project = _project(args)
+    state = project.state_dir
+    try:
+        pid = json.loads((state / "endpoint.json").read_text()).get("pid")
+        if pid:
+            os.kill(int(pid), 0)
+            print(f"orchestra run is running (pid {pid}): stop it first", file=sys.stderr)
+            return 1
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, TypeError):
+        pass
+    gone = sorted(p for p in state.iterdir() if p.name not in KEEP) if state.exists() else []
+    if not gone:
+        print("nothing to clear")
+        return 0
+    if not args.yes:
+        print("this removes, in " + str(state) + ":\n  " + "\n  ".join(p.name for p in gone)
+              + "\nrun again with --yes to clear it")
+        return 1
+    for p in gone:
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
+    print(f"cleared {len(gone)} entries in {state}; kept the config and tokens. "
+          "Your scripts' own cursors, if they keep any outside it, still remember what they relayed.")
+    return 0
+
+
 def cmd_setup(args) -> int:
     """Works on a broken config too: fixing it is part of the job."""
     from . import setup
@@ -209,6 +241,9 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("init", help="make the state directory")
     s.add_argument("--config", action="store_true", help="and an empty orchestra.yaml")
     s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("reset", help="clear the data (bus, metrics, items, runs, logs, model), keeping the config")
+    s.add_argument("--yes", action="store_true", help="do it (without it, say what would go)")
+    s.set_defaults(fn=cmd_reset)
     s = sub.add_parser("setup", help="a Claude Code session that sets this project up: the config, its scripts and prompts")
     s.add_argument("message", nargs="*", help="what you want, to start with (else it asks)")
     s.add_argument("--print-prompt", action="store_true", help="print the setup agent's brief and stop")
