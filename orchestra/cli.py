@@ -36,7 +36,12 @@ def cmd_init(args) -> int:
     return 0
 
 
-KEEP = {"orchestra.yaml", "orchestra.yml", "orchestra.json", "web.token", "events.token"}
+# Orchestra's own data, the only things reset removes. Anything else in the state directory (the
+# overlay, scripts and prompts kept beside it, a cursor a script keeps) is the owner's and is never
+# touched (the owner, 2026-11-05: an earlier reset removed everything but a keep-list, and with it
+# the scripts the setup agent had put there).
+DATA = ("events.jsonl", "metrics.jsonl", "items.json", "cursor.json", "health.json", "endpoint.json", "web.json",
+        "model", "runs", "logs", "stores")
 
 
 def cmd_reset(args) -> int:
@@ -53,7 +58,7 @@ def cmd_reset(args) -> int:
             return 1
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, TypeError):
         pass
-    gone = sorted(p for p in state.iterdir() if p.name not in KEEP) if state.exists() else []
+    gone = sorted(p for p in (state / name for name in DATA) if p.exists()) if state.exists() else []
     if not gone:
         print("nothing to clear")
         return 0
@@ -63,8 +68,8 @@ def cmd_reset(args) -> int:
         return 1
     for p in gone:
         shutil.rmtree(p) if p.is_dir() else p.unlink()
-    print(f"cleared {len(gone)} entries in {state}; kept the config and tokens. "
-          "Your scripts' own cursors, if they keep any outside it, still remember what they relayed.")
+    print(f"cleared Orchestra's data in {state}; nothing else there was touched. "
+          "Your scripts' own cursors still remember what they relayed.")
     return 0
 
 
