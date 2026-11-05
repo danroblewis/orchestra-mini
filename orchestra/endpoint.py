@@ -79,5 +79,11 @@ def serve(project, publisher, stop: threading.Event, host: str = "127.0.0.1", po
     url = f"http://{host}:{server.server_address[1]}"
     project.path("endpoint.json").write_text(json.dumps({"url": url, "pid": os.getpid()}))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    threading.Thread(target=lambda: (stop.wait(), server.shutdown(), server.server_close()), daemon=True).start()
+
+    def close():
+        stop.wait()
+        server.shutdown()
+        server.server_close()
+        (project.state_dir / "endpoint.json").unlink(missing_ok=True)
+    threading.Thread(target=close, daemon=True).start()
     return url
