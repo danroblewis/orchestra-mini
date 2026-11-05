@@ -93,3 +93,10 @@ def test_secret_keys_are_refused_but_env_names_pass():
     c = build_config({"stores": [{"name": "s", "url": "https://x", "match": '{a="b"}', "token_env": "X_TOKEN",
                                   "auth": {"header": "X-Key", "token_env": "K"}, "kinds": {"*_total": "flow"}}]})
     assert c.stores[0].token_env == "X_TOKEN" and c.stores[0].auth.header == "X-Key"
+
+
+def test_on_is_a_key_not_a_boolean(make_project):
+    (make_project.repo / "orchestra.yaml").write_text(
+        "processes:\n  - name: w\n    prompt: w.md\n    on: [a.b.c]\n    continuous: false\n    model: yes\n")
+    (w,) = load(make_project.repo).config.processes
+    assert w.on == ["a.b.c"] and w.continuous is False and w.model == "yes"

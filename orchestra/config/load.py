@@ -5,6 +5,7 @@ where home is ``ORCHESTRA_HOME`` or ``~/.orchestra``. JSON is YAML, so one reade
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -13,6 +14,15 @@ from .build import ConfigError
 from .merge import drop_disabled, merge
 
 NAMES = ("orchestra.yaml", "orchestra.yml", "orchestra.json")
+
+
+class Loader(yaml.SafeLoader):
+    """YAML 1.2's booleans: only true and false, so ``on:`` is the key ``on``, not True."""
+
+
+Loader.yaml_implicit_resolvers = {k: [r for r in v if r[0] != "tag:yaml.org,2002:bool"]
+                                  for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+Loader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
 
 
 def home() -> Path:
@@ -30,7 +40,7 @@ def read(path: Path | None) -> dict:
     if path is None:
         return {}
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = yaml.load(path.read_text(encoding="utf-8"), Loader=Loader)
     except yaml.YAMLError as e:
         raise ConfigError(f"{path}: {e}") from None
     if raw is None:
