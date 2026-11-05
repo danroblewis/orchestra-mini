@@ -33,3 +33,20 @@ def test_setup_starts_on_a_config_that_does_not_load(tmp_path):
     r = subprocess.run([sys.executable, "-m", "orchestra", "--repo", str(repo), "setup", "--print-prompt"],
                        env=env, capture_output=True, text=True, timeout=60, check=False)
     assert r.returncode == 0 and "the setup agent will fix it" in r.stderr and "not_a_key" in r.stdout
+
+
+def test_chat_briefs_the_supervisor_with_what_is_happening_and_can_continue(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "claude").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n')
+    (fake / "claude").chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "ORCHESTRA_HOME": str(tmp_path / "home"),
+           "CAPTURE": str(tmp_path / "args")}
+    r = subprocess.run([sys.executable, "-m", "orchestra", "--repo", str(repo), "chat", "--continue"],
+                       env=env, capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 0, r.stderr
+    args = (tmp_path / "args").read_text()
+    assert args.startswith("--continue\n") and "You are this project's Supervisor" in args
+    assert "# What is happening now" in args and "# SPEC.md" in args

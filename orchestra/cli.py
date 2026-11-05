@@ -73,6 +73,12 @@ def cmd_reset(args) -> int:
     return 0
 
 
+def cmd_chat(args) -> int:
+    """The Supervisor: Claude Code briefed with the spec, the setup and what is happening now."""
+    args.brief = "chat.md"
+    return cmd_setup(args)
+
+
 def cmd_setup(args) -> int:
     """Works on a broken config too: fixing it is part of the job."""
     from . import setup
@@ -84,7 +90,8 @@ def cmd_setup(args) -> int:
         root = args.repo or repo_root()
         project = Project(root.name, root, Config(), [])
         print(f"orchestra setup: the config does not load yet ({e}); the setup agent will fix it", file=sys.stderr)
-    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt)
+    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt,
+                     brief=getattr(args, "brief", "setup.md"), resume=args.resume)
 
 
 def cmd_run(args) -> int:
@@ -252,7 +259,13 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("setup", help="a Claude Code session that sets this project up: the config, its scripts and prompts")
     s.add_argument("message", nargs="*", help="what you want, to start with (else it asks)")
     s.add_argument("--print-prompt", action="store_true", help="print the setup agent's brief and stop")
+    s.add_argument("--continue", dest="resume", action="store_true", help="carry on the last session in this folder")
     s.set_defaults(fn=cmd_setup)
+    s = sub.add_parser("chat", help="talk to the Supervisor: a Claude Code session that answers about Orchestra and changes it")
+    s.add_argument("message", nargs="*", help="what you want (else it waits for you)")
+    s.add_argument("--print-prompt", action="store_true", help="print the Supervisor's brief and stop")
+    s.add_argument("--continue", dest="resume", action="store_true", help="carry on the last session in this folder")
+    s.set_defaults(fn=cmd_chat)
     s = sub.add_parser("run", help="run everything")
     s.add_argument("--web", action="store_true", help="also serve the pages")
     s.add_argument("--listen", default="127.0.0.1:8765", help="where the pages listen")

@@ -43,18 +43,32 @@ def context(project) -> str:
             f"- gh:\n```\n{gh[:1500]}\n```\n\n## Config files\n\n{shown}\n\n## orchestra check\n```\n{check[:3000]}\n```\n")
 
 
-def prompt(project) -> str:
-    return "\n\n".join([(HERE / "setup.md").read_text(encoding="utf-8"), context(project),
-                        "# SPEC.md\n\n" + (HERE / "SPEC.md").read_text(encoding="utf-8")])
+def now(project) -> str:
+    """What is happening: open items by kind, the latest runs and events, in a few lines."""
+    root = project.repo
+    o = [sys.executable, "-m", "orchestra", "--repo", str(root)]
+    parts = [("open items", o + ["items", "-n", "15"]), ("latest runs", o + ["runs"]), ("latest events", o + ["events", "-n", "15"])]
+    return "# What is happening now\n\n" + "\n".join(f"## {t}\n```\n{_run(cmd, root)[:2500]}\n```" for t, cmd in parts)
 
 
-def run(project, message: str | None, print_only: bool = False, binary: str = "claude") -> int:
+def prompt(project, brief: str = "setup.md") -> str:
+    pieces = [(HERE / brief).read_text(encoding="utf-8"), context(project)]
+    if brief == "chat.md":
+        pieces.append(now(project))
+    return "\n\n".join(pieces + ["# SPEC.md\n\n" + (HERE / "SPEC.md").read_text(encoding="utf-8")])
+
+
+def run(project, message: str | None, print_only: bool = False, binary: str = "claude", brief: str = "setup.md",
+        resume: bool = False) -> int:
+    """Claude Code, interactive, briefed; ``resume`` carries on the last session in this folder."""
     if not shutil.which(binary):
-        print(f"orchestra setup needs Claude Code ({binary}) on PATH: https://docs.claude.com/en/docs/claude-code", file=sys.stderr)
+        print(f"orchestra needs Claude Code ({binary}) on PATH: https://docs.claude.com/en/docs/claude-code", file=sys.stderr)
         return 2
-    text = prompt(project)
+    text = prompt(project, brief)
     if print_only:
         print(text)
         return 0
-    first = message or "Set Orchestra up for this project. Start by asking me what I want it to watch and do."
-    return subprocess.call([binary, "--append-system-prompt", text, first], cwd=project.repo)
+    first = message or ("Set Orchestra up for this project. Start by asking me what I want it to watch and do."
+                        if brief == "setup.md" else None)
+    cmd = [binary, *(["--continue"] if resume else []), "--append-system-prompt", text, *([first] if first else [])]
+    return subprocess.call(cmd, cwd=project.repo)

@@ -172,6 +172,9 @@ time comes and publishes `orchestra.prediction.judged`.
 - `orchestra setup [what you want]`: a Claude Code session briefed with this spec and what is already
   set up (the config, `orchestra check`, credential variable names, `gh`'s login), which designs and
   writes the config, its scripts and prompts, proves them against the real systems, and reports.
+- `orchestra chat [message] [--continue]`: the Supervisor, a Claude Code session briefed with this
+  spec, the setup and what is happening now (open items, runs, events), which answers about
+  Orchestra and changes it; `--continue` carries on the last session (`setup` takes it too).
 - `orchestra reset [--yes]`: clears the data (bus, metrics, items, runs, logs, model) and keeps the
   config and tokens; refused while `orchestra run` runs.
 - `orchestra init`: makes the state directory and, if asked, an empty `orchestra.yaml`.

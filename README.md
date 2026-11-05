@@ -21,6 +21,7 @@ orchestra init         # the state directory, ~/.orchestra/<project>/
 orchestra setup        # a Claude Code session that asks what you want, then writes and tests
                        # orchestra.yaml, its scripts and its prompts; or: orchestra setup "watch our Jira"
 orchestra run --web    # everything, and the pages; Ctrl-C stops it
+orchestra chat         # talk to the Supervisor: what's happening, and changes; --continue resumes
 orchestra reset        # clear the data and start over (keeps the config); --yes to do it
 ```
 
