@@ -34,6 +34,7 @@ class Equation:
     window: tuple[float, float] | None = None
     quality: dict[str, float] = field(default_factory=dict)   # loglik, aic, events
     inputs: list[str] = field(default_factory=list)            # the stock ids the form reads
+    spec: dict[str, Any] = field(default_factory=dict)         # the whole rate as SD Lab writes it, when it found it
 
 
 @dataclass

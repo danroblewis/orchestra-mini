@@ -12,18 +12,22 @@ ARRIVALS = 2.0      # per minute
 SERVICE = 0.25      # per minute per item waiting
 
 
-def history(end: float, minutes: int = 60, seed: int = 7) -> list[Point]:
+def history(end: float, minutes: int = 60, seed: int = 7, abandon: float = 0.0) -> list[Point]:
+    """``abandon``: items leaving the queue per minute per item waiting, which no counter counts."""
     rnd = random.Random(seed)
     t, start = end - minutes * 60, end - minutes * 60
     queue, arrived, served, noise = 5, 0, 0, 0
     out = [Point("queue_depth", queue, start, {"queue": "triage"}), Point("arrivals_total", 0, start, {}),
            Point("served_total", 0, start, {})]
     while True:
-        rate_in, rate_out = ARRIVALS / 60, SERVICE * queue / 60
-        t += rnd.expovariate(rate_in + rate_out)
+        rate_in, rate_out, rate_gone = ARRIVALS / 60, SERVICE * queue / 60, abandon * queue / 60
+        t += rnd.expovariate(rate_in + rate_out + rate_gone)
         if t >= end:
             break
-        if rnd.random() < rate_in / (rate_in + rate_out):
+        u = rnd.random() * (rate_in + rate_out + rate_gone)
+        if u >= rate_in + rate_out:
+            queue -= 1
+        elif u < rate_in:
             queue, arrived = queue + 1, arrived + 1
             out.append(Point("arrivals_total", arrived, t, {}))
         else:

@@ -108,7 +108,7 @@ def discover(series: list[Series], *, start: float, end: float, step: float, nam
         sid = unique(slug(lv), taken)
         by_level[sid] = lv
         stocks.append(Stock(sid, title(lv), ref(lv), {
-            "r2": round(r2, 4), "exact": round(exact, 4), "steps": len(lv.deltas),
+            "r2": round(r2, 4), "exact": round(exact, 4), "steps": len(lv.deltas), "key": lv.key,
             "balance": [{"counter": c.key, "sign": s} for c, s in terms]}))
         for c, s in terms:
             claims.setdefault(c.key, (c, {}))[1].setdefault("dst" if s > 0 else "src", []).append((sid, r2))
