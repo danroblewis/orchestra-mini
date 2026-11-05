@@ -221,3 +221,4 @@ class Runner:
             command.kill(p)
         for t in self.threads:
             t.join(2)
+        (self.project.state_dir / "endpoint.json").unlink(missing_ok=True)   # not left to the endpoint's daemon thread

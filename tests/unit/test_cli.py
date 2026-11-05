@@ -38,7 +38,7 @@ def test_emit_events_items_runs_tool(make_project, capsys, monkeypatch):
     assert run("tool", "hi", "who=x") == 2 and "w may not call hi" in capsys.readouterr().err
     assert run("runs") == 0
     assert run("endpoint") == 1, "no endpoint until orchestra run"
-    assert run("model") == 2, "discovery is part 2"
+    assert run("model") == 1 and "no model yet" in capsys.readouterr().out
 
 
 def test_check_and_metrics_and_query(make_project, capsys):
