@@ -36,6 +36,20 @@ def cmd_init(args) -> int:
     return 0
 
 
+def cmd_setup(args) -> int:
+    """Works on a broken config too: fixing it is part of the job."""
+    from . import setup
+    from .config import Config
+    from .project import Project, repo_root
+    try:
+        project = _project(args)
+    except ConfigError as e:
+        root = args.repo or repo_root()
+        project = Project(root.name, root, Config(), [])
+        print(f"orchestra setup: the config does not load yet ({e}); the setup agent will fix it", file=sys.stderr)
+    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt)
+
+
 def cmd_run(args) -> int:
     from .runner import Runner
     project = _project(args)
@@ -193,6 +207,10 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("init", help="make the state directory")
     s.add_argument("--config", action="store_true", help="and an empty orchestra.yaml")
     s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("setup", help="a Claude Code session that sets this project up: the config, its scripts and prompts")
+    s.add_argument("message", nargs="*", help="what you want, to start with (else it asks)")
+    s.add_argument("--print-prompt", action="store_true", help="print the setup agent's brief and stop")
+    s.set_defaults(fn=cmd_setup)
     s = sub.add_parser("run", help="run everything")
     s.add_argument("--web", action="store_true", help="also serve the pages")
     s.add_argument("--listen", default="127.0.0.1:8765", help="where the pages listen")

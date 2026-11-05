@@ -18,12 +18,12 @@ uv tool install --force 'orchestra[sd] @ git+https://github.com/danroblewis/orch
 ```bash
 cd <your repository>
 orchestra init         # the state directory, ~/.orchestra/<project>/
-# write orchestra.yaml (here, or as the overlay in the state directory): SPEC.md section 1
-orchestra check        # the config, and each store's, command's and process's health
+orchestra setup        # a Claude Code session that asks what you want, then writes and tests
+                       # orchestra.yaml, its scripts and its prompts; or: orchestra setup "watch our Jira"
 orchestra run --web    # everything, and the pages; Ctrl-C stops it
 ```
 
-Secrets come from environment variables named in the config (`token_env: JIRA_TOKEN`). An agent
+The config stays short and readable, so you can edit it by hand too. Secrets come from environment variables named in the config (`token_env: JIRA_TOKEN`). An agent
 process runs Claude Code with your own login and environment.
 
 ## Read

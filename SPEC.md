@@ -163,6 +163,9 @@ time comes and publishes `orchestra.prediction.judged`.
 
 ## 7. Commands and pages
 
+- `orchestra setup [what you want]`: a Claude Code session briefed with this spec and what is already
+  set up (the config, `orchestra check`, credential variable names, `gh`'s login), which designs and
+  writes the config, its scripts and prompts, proves them against the real systems, and reports.
 - `orchestra init`: makes the state directory and, if asked, an empty `orchestra.yaml`.
 - `orchestra run [--web]`: runs everything; `--web` also serves the pages.
 - `orchestra check`: validates the config and says each store's, command's and process's health.
