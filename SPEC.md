@@ -110,7 +110,7 @@ A process is a command Orchestra starts, of one of three kinds:
   it prints, or `orchestra emit '<json>'` from its shell.
 - **decision**: one model call with `question` and `answers` (and `inputs`: the item fields to
   include); it publishes `decision.made` with the answer, its confidence and a one-line reason, and an
-  event `<process>.<answer>` (so `on: sail_triage.real` reads plainly). Below `min_confidence`
+  event `<process>.<answer>` (so `on: ci_triage.real` reads plainly). Below `min_confidence`
   (default 0.6) the answer is `unsure`.
 - **program**: `command`, run with the event on stdin; its stdout lines are events.
 
