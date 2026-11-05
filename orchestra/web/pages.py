@@ -62,9 +62,17 @@ def runs_table(rs: list[dict]) -> str:
                    f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "", e(r.get("note"))] for r in rs], "no runs yet")
 
 
+def _value(v) -> str:
+    return "" if v is None else e(v if isinstance(v, str) else json.dumps(v))
+
+
+def _kind_table(g: dict, closed: bool) -> str:
+    rows = [[item_link(i["subject"]), e(i["title"])] + [_value(v) for v in i["values"]]
+            + [e(i["type"]), when(i["last"]), e(i["waiting_on"]), "closed" if i["done"] else "open"] for i in g["items"]]
+    return table(["item", "title", *g["columns"], "latest", "when", "waits on", "state"], rows, "none")
+
+
 def items(d: dict) -> str:
-    rows = [[item_link(i["subject"]), e(i.get("kind") or ""), e(i["title"]), e(i["type"]), when(i["last"]), e(i["waiting_on"]),
-             "closed" if i["done"] else "open", e(i["events"])] for i in d["items"]]
     kind = d.get("kind")
     q = ("&closed=1" if d["closed"] else "") + (f"&kind={quote(kind)}" if kind else "")
     kinds = " · ".join(['<a href="/items">all</a>' if kind else "<b>all</b>"]
@@ -77,9 +85,18 @@ def items(d: dict) -> str:
         pages.append(f'<a href="/items?page={d["page"] + 1}{q}">older</a>')
     base = f"/items?kind={quote(kind)}&" if kind else "/items?"
     toggle = f'<a href="{base}">hide closed</a>' if d["closed"] else f'<a href="{base}closed=1">show closed</a>'
-    shown = f'{d["page"] * d["n"] + 1 if d["items"] else 0}-{d["page"] * d["n"] + len(d["items"])} of {d["total"]}'
-    return (f'<p class="kinds">{kinds}</p><p>{shown} {"items" if d["closed"] else "open items"} · {toggle}</p>'
-            + table(["item", "kind", "title", "latest", "when", "waits on", "state", "events"], rows, "no items")
+    closed = "&closed=1" if d["closed"] else ""
+    if kind:                                    # one kind: its table, paged
+        g = d["groups"][0] if d["groups"] else {"kind": kind, "total": 0, "columns": [], "items": []}
+        shown = f'{d["page"] * d["n"] + 1 if g["items"] else 0}-{d["page"] * d["n"] + len(g["items"])} of {d["total"]}'
+        body = f'<p>{shown} {"items" if d["closed"] else "open items"} · {toggle}</p>' + _kind_table(g, d["closed"])
+    else:                                       # every kind: a table each, the newest of each
+        body = f'<p>{d["total"]} {"items" if d["closed"] else "open items"} · {toggle}</p>' + ("".join(
+            f'<section><h2><a href="/items?kind={quote(g["kind"])}{closed}">{e(g["kind"])}</a> '
+            f'<span class="muted">({g["total"]}{", the newest " + str(len(g["items"])) if g["total"] > len(g["items"]) else ""})</span></h2>'
+            + _kind_table(g, d["closed"]) + "</section>" for g in d["groups"]) or "<p>no items</p>")
+        pages = []
+    return (f'<p class="kinds">{kinds}</p>' + body
             + f'<p class="pager">{" · ".join(pages)}</p>')
 
 

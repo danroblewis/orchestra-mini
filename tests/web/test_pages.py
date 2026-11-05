@@ -94,13 +94,14 @@ def test_each_page_renders(site):
 def test_items_page_closed_hidden_paged_and_waiting(site):
     p, port = site
     h = login(p, port)
-    _, _, first = ask(port, "/items", headers=h)
-    assert "1-25 of 29 open items" in first and "ABC-4" not in first and "older" in first
-    assert "owner" in first
-    _, _, second = ask(port, "/items?page=1", headers=h)
+    _, _, first = ask(port, "/items", headers=h)          # the overview: a table per kind, the newest of each
+    assert "29 open items" in first and "tracker.issue" in first and "the newest 10" in first and "ABC-4" not in first
+    _, _, kind1 = ask(port, "/items?kind=tracker.issue", headers=h)   # one kind: all of it, paged
+    assert "1-25 of 29 open items" in kind1 and "older" in kind1 and "owner" in kind1
+    _, _, second = ask(port, "/items?kind=tracker.issue&page=1", headers=h)
     assert "26-29 of 29" in second and "newer" in second
     _, _, closed = ask(port, "/items?closed=1&page=0", headers=h)
-    assert "of 30 items" in closed and "ABC-4" in closed and "closed" in closed
+    assert "30 items" in closed and "ABC-4" in closed and "closed" in closed
     status, _, one = ask(port, "/items?show=ABC-3", headers=h)
     assert status == 200 and "waits on <b>owner</b>" in one and "tracker.issue.blocked" in one
     assert ask(port, "/items?show=NOPE", headers=h)[0] == 404

@@ -48,13 +48,45 @@ def _health(project) -> dict:
         return {}
 
 
+SHOWN_FIELDS = 4             # a kind's table shows its most common fields, at most this many beside the title
+PER_KIND = 10                # the overview shows this many of each kind; the kind's own page shows them all
+
+
+def _columns(found: list[dict]) -> list[str]:
+    """The fields most of a kind's items have (besides title and waiting_on), commonest first."""
+    seen: dict[str, int] = {}
+    for i in found:
+        for k, v in (i.get("fields") or {}).items():
+            if k not in ("title", "waiting_on") and not isinstance(v, (dict, list)):
+                seen[k] = seen.get(k, 0) + 1
+    return [k for k, c in sorted(seen.items(), key=lambda kv: (-kv[1], kv[0])) if c * 2 >= len(found)][:SHOWN_FIELDS]
+
+
+def _row(i: dict, cols: list[str]) -> dict:
+    f = i.get("fields") or {}
+    return {k: i.get(k) for k in ("subject", "kind", "type", "first", "last", "done")} | {
+        "waiting_on": f.get("waiting_on"), "title": f.get("title"), "values": [f.get(c) for c in cols],
+        "events": len(i.get("events") or [])}
+
+
 def items(project, page: int = 0, n: int = 25, closed: bool = False, kind: str | None = None) -> dict:
+    """One table per kind (the overview: the newest of each), or one kind's items, paged."""
     store = Items(project, Events.for_project(project))
     found = store.list(closed=closed, kind=kind)
-    rows = [{k: i.get(k) for k in ("subject", "kind", "type", "first", "last", "done")} | {
-        "waiting_on": (i.get("fields") or {}).get("waiting_on"), "title": (i.get("fields") or {}).get("title"),
-        "events": len(i.get("events") or [])} for i in found[page * n:(page + 1) * n]]
-    return {"items": rows, "page": page, "n": n, "total": len(found), "closed": closed, "kind": kind, "kinds": store.kinds()}
+    groups = []
+    order: list[str] = []
+    by: dict[str, list[dict]] = {}
+    for i in found:
+        k = i.get("kind") or "?"
+        if k not in by:
+            order.append(k)
+            by[k] = []
+        by[k].append(i)
+    for k in order:
+        cols = _columns(by[k])
+        rows = by[k][page * n:(page + 1) * n] if kind else by[k][:PER_KIND]
+        groups.append({"kind": k, "total": len(by[k]), "columns": cols, "items": [_row(i, cols) for i in rows]})
+    return {"groups": groups, "page": page, "n": n, "total": len(found), "closed": closed, "kind": kind, "kinds": store.kinds()}
 
 
 def item(project, subject: str) -> dict | None:
