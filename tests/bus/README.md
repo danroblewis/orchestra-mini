@@ -4,7 +4,7 @@ One suite for every `orchestra.bus` backend. The file backend always runs; each 
 runs when its URL is set.
 
 ```
-docker compose -f deploy/dev/compose.yaml up -d        # Redis, RabbitMQ, Kafka, VictoriaMetrics
+# with Redis, RabbitMQ, Kafka and VictoriaMetrics listening locally
 uv sync --extra dev --extra bus
 ORCHESTRA_TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
 ORCHESTRA_TEST_AMQP_URL=amqp://orchestra:orchestra@127.0.0.1:5672/ \

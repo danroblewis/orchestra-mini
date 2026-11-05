@@ -23,11 +23,11 @@ from orchestra.project import load
 
 FEED = """
 import json
-created = json.dumps({"type": "jira.issue.created", "subject": "ABC-1", "id": "jira:ABC-1:1", "data": {"title": "Fix it"}})
+created = json.dumps({"type": "tracker.issue.created", "subject": "ABC-1", "id": "tracker:ABC-1:1", "data": {"title": "Fix it"}})
 print(created)
 print(created)
-print(json.dumps({"type": "jira.issue.transitioned", "subject": "ABC-1", "id": "jira:ABC-1:2",
-                  "source": "person.jira.alice", "time": "2026-01-01T00:00:00Z", "data": {"to": "In Progress"}}))
+print(json.dumps({"type": "tracker.issue.transitioned", "subject": "ABC-1", "id": "tracker:ABC-1:2",
+                  "source": "person.tracker.alice", "time": "2026-01-01T00:00:00Z", "data": {"to": "In Progress"}}))
 """
 SIZER = """
 import json, sys
@@ -41,11 +41,11 @@ print(json.dumps({"type": "chat.message.posted", "subject": "ABC-1", "data": {"t
 """
 CONFIG = {
     "project": "e2e",
-    "events": [{"name": "jira", "command": "scripts/feed.py", "every": "1s"}],
+    "events": [{"name": "tracker", "command": "scripts/feed.py", "every": "1s"}],
     "metrics": [{"name": "queues", "command": "scripts/queues.py", "every": "1s"}],
     "tools": [{"name": "notify", "command": "scripts/notify.py {text}", "help": "Post a message."}],
     "processes": [
-        {"name": "sizer", "kind": "program", "command": "scripts/sizer.py", "on": "jira.issue.created"},
+        {"name": "sizer", "kind": "program", "command": "scripts/sizer.py", "on": "tracker.issue.created"},
         {"name": "worker", "prompt": "prompts/worker.md", "on": "sizer.issue.sized", "tools": ["notify"]},
         {"name": "triage", "kind": "decision", "question": "Is the work real?", "answers": ["real", "noise"],
          "on": "agent.work.done"},
@@ -79,10 +79,10 @@ def test_orchestra_run(tmp_path):
         by = {e["type"]: e for e in evs}
 
         # the bus: the duplicated line once, every round's repeats dropped, and the chain
-        assert types.count("jira.issue.created") == 1 and types.count("jira.issue.transitioned") == 1
+        assert types.count("tracker.issue.created") == 1 and types.count("tracker.issue.transitioned") == 1
         for t in ("sizer.issue.sized", "agent.work.done", "agent.note.left", "chat.message.posted", "decision.made", "triage.real"):
             assert types.count(t) == 1, (t, types)
-        assert by["jira.issue.created"]["source"] == "jira" and by["jira.issue.transitioned"]["source"] == "person.jira.alice"
+        assert by["tracker.issue.created"]["source"] == "tracker" and by["tracker.issue.transitioned"]["source"] == "person.tracker.alice"
         assert by["sizer.issue.sized"]["source"] == "sizer" and by["agent.work.done"]["source"] == "worker"
         assert by["chat.message.posted"]["source"] == "worker", "a tool called from the agent's shell publishes as the agent"
         assert by["decision.made"]["data"] == {"process": "triage", "answer": "real", "confidence": 0.9, "reason": "it looks real"}
@@ -111,11 +111,11 @@ def test_orchestra_run(tmp_path):
 
         # the machines
         found = {m["name"]: m for m in machines(project)}
-        assert {"sizer", "worker", "triage", "jira", "person.jira.alice"} <= set(found)
-        assert found["sizer"]["listens_for"] == ["jira.issue.created"] and found["sizer"]["runs"] == 1
+        assert {"sizer", "worker", "triage", "tracker", "person.tracker.alice"} <= set(found)
+        assert found["sizer"]["listens_for"] == ["tracker.issue.created"] and found["sizer"]["runs"] == 1
         assert found["worker"]["publishes"] == {"agent.work.done": 1, "agent.note.left": 1, "chat.message.posted": 1}
         assert found["triage"]["publishes"] == {"decision.made": 1, "triage.real": 1}
-        assert found["person.jira.alice"]["process"] is None and found["person.jira.alice"]["last_seen"]
+        assert found["person.tracker.alice"]["process"] is None and found["person.tracker.alice"]["last_seen"]
         assert "events endpoint http://127.0.0.1:" in out.stdout and not (home / "e2e" / "endpoint.json").exists()
     finally:
         os.environ.pop("ORCHESTRA_HOME", None)

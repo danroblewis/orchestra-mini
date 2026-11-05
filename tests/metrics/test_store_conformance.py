@@ -85,12 +85,12 @@ def test_dump_returns_every_matching_series_in_one_pass(store):
 def test_a_point_stamped_in_the_future_is_refused_and_logged(store, caplog):
     now = time.time()
     with caplog.at_level(logging.WARNING, logger="orchestra.metrics"):
-        store.write([P(store, "caiso_demand_mw", 1, now - 30, machine="telemetry"),
-                     P(store, "caiso_demand_mw", 2, now + FUTURE_SKEW_S / 2, machine="telemetry"),     # a clock a little ahead
-                     P(store, "caiso_demand_mw", 3, now + 13 * 3600, machine="telemetry")])            # stamped tonight
-    pts = store.raw("caiso_demand_mw", {"project": store.project, "machine": "telemetry"})
+        store.write([P(store, "grid_demand_mw", 1, now - 30, machine="telemetry"),
+                     P(store, "grid_demand_mw", 2, now + FUTURE_SKEW_S / 2, machine="telemetry"),     # a clock a little ahead
+                     P(store, "grid_demand_mw", 3, now + 13 * 3600, machine="telemetry")])            # stamped tonight
+    pts = store.raw("grid_demand_mw", {"project": store.project, "machine": "telemetry"})
     assert [v for _, v in pts] == [1, 2]
-    assert "refused 1 point(s)" in caplog.text and "caiso_demand_mw" in caplog.text
+    assert "refused 1 point(s)" in caplog.text and "grid_demand_mw" in caplog.text
 
 
 def test_recent_reads_only_series_with_a_point_since_and_their_last_points(store):

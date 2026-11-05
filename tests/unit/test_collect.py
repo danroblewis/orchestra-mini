@@ -7,10 +7,10 @@ from orchestra.collect import collect, points_of
 
 
 def test_points_are_labelled_and_orchestra_series_refused():
-    r = points_of("jira", 'open_issues{team="a",command="x"} 4\norchestra_fake 1\nnot a line\nclosed_total 9 1000\n', 50.0)
+    r = points_of("tracker", 'open_issues{team="a",command="x"} 4\norchestra_fake 1\nnot a line\nclosed_total 9 1000\n', 50.0)
     assert [(p.series, p.value, p.ts, p.labels) for p in r.points] == [
-        ("closed_total", 9.0, 1.0, {"command": "jira"}),            # in time order
-        ("open_issues", 4.0, 50.0, {"team": "a", "exported_command": "x", "command": "jira"})]
+        ("closed_total", 9.0, 1.0, {"command": "tracker"}),            # in time order
+        ("open_issues", 4.0, 50.0, {"team": "a", "exported_command": "x", "command": "tracker"})]
     assert r.refused == ["orchestra_fake"] and len(r.bad) == 1
 
 

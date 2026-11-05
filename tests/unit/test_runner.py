@@ -28,9 +28,9 @@ def running(project):
 
 def test_listens_by_glob_and_never_to_itself():
     from orchestra.config.schema import Process
-    p = Process(name="w", kind="program", command="x", on=["jira.*", "pr.commented"])
-    assert listens(p, {"type": "jira.issue.created", "source": "jira"})
-    assert not listens(p, {"type": "jira.issue.created", "source": "w"})
+    p = Process(name="w", kind="program", command="x", on=["tracker.*", "pr.commented"])
+    assert listens(p, {"type": "tracker.issue.created", "source": "tracker"})
+    assert not listens(p, {"type": "tracker.issue.created", "source": "w"})
     assert not listens(p, {"type": "pr.opened", "source": "gh"})
 
 

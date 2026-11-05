@@ -12,7 +12,7 @@ from orchestra.events import Events
 from orchestra.lines import Publisher
 from orchestra.processes import start_run
 
-TRIGGER = {"specversion": "1.0", "id": "e1", "type": "t.task.created", "source": "jira", "subject": "T-1",
+TRIGGER = {"specversion": "1.0", "id": "e1", "type": "t.task.created", "source": "tracker", "subject": "T-1",
            "time": "2026-11-05T10:00:00.000Z", "data": {"title": "x"}}
 ITEM = {"subject": "T-1", "fields": {"title": "x", "size": 3}, "events": [TRIGGER]}
 
