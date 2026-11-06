@@ -1,16 +1,18 @@
 """``orchestra agent <prompt file> [--model M] [--per-day-usd N]`` (SPEC §3): a built-in program a
-machine names in its ``command``. Like any machine it reads events on stdin and writes event,
+machine names in its ``command``. Like any machine it reads facts on stdin and writes fact,
 metric and run lines on stdout.
 
 It runs Claude Code, ``claude -p --output-format stream-json``, with the owner's environment
 unstripped and ``--dangerously-skip-permissions``: it acts with its own shell and the owner's
-credentials. Its instructions are the prompt file and how to say what happened; each event comes
-with its item's state.
+credentials. Its instructions are the prompt file and how to say what happened; each fact comes
+with its subject (``about``): the subject's last ``RECENT`` facts, one per line, each view other
+than ``latest`` in full up to ``VIEW_MAX`` bytes (else named only; ``VIEWS_MAX`` in all), and
+``latest``'s ``fields`` and ``last`` only, with where to read the rest.
 
-- **once**: one turn per event on stdin (one turn with no event for a scheduled run), the
-  instructions and the event given to ``claude`` on its stdin.
+- **once**: one turn per fact on stdin (one turn with no fact for a scheduled run), the
+  instructions and the fact given to ``claude`` on its stdin.
 - **continuous** (``ORCHESTRA_CONTINUOUS=1``): one session, ``--input-format stream-json`` with the
-  instructions appended to the system prompt; each event one user message, one turn at a time.
+  instructions appended to the system prompt; each fact one user message, one turn at a time.
 
 The JSON lines in what Claude says (its assistant text; the result's, which repeats it, only when a
 turn had none) or prints outside the stream go to stdout; any other text to stderr (the log). Each
@@ -29,13 +31,14 @@ import sys
 import threading
 from pathlib import Path
 
-from .program import events_in, item_of, line, project, say
+from .program import facts_in, line, project, recent, say, views_of
 
 STREAM = {"system", "assistant", "user", "result", "stream_event", "rate_limit_event"}
+RECENT, VIEW_MAX, VIEWS_MAX = 10, 2048, 8192
 EMITTING = """## Saying what happened
 
-Say what you did as events: print one JSON object per line in your answer, like
-{"type": "<system>.<noun>.<verb>", "subject": "<the item>", "data": {...}}
+Say what you did as facts: print one JSON object per line in your answer, like
+{"type": "<system>.<noun>.<verb>", "subject": "<what it is about>", "data": {...}}
 and measurements as {"metric": "<what it measures>", "value": 3, "labels": {...}},
 or run `orchestra emit '<json>'` in your shell."""
 
@@ -69,10 +72,34 @@ def instructions(prompt: Path) -> str:
     return prompt.read_text(encoding="utf-8").rstrip() + "\n\n" + EMITTING + "\n"
 
 
-def about(event: dict | None, item: dict | None) -> str:
-    parts = ["## The event\n\n" + (json.dumps(event, indent=2) if event else "(none: a scheduled run)")]
-    if item:
-        parts.append("## The item's state\n\n" + json.dumps(item, indent=2))
+def about(fact: dict | None) -> str:
+    """The turn's message: the fact, and its subject's recent facts and views."""
+    parts = ["## The fact\n\n" + (json.dumps(fact, indent=2) if fact else "(none: a scheduled run)")]
+    subject = (fact or {}).get("subject")
+    if not subject:
+        return parts[0] + "\n"
+    facts = recent(subject, RECENT)
+    if facts:
+        parts.append(f"## The last {len(facts)} facts about {subject}\n\n" + "\n".join(json.dumps(f) for f in facts))
+    views, file = views_of(fact)
+    shown, room, named = [], VIEWS_MAX, []
+    for name, v in views.items():
+        if name == "latest":
+            continue
+        text = json.dumps(v, indent=1)
+        if len(text) <= VIEW_MAX and len(text) <= room:
+            shown.append(f"### {name}\n\n{text}")
+            room -= len(text)
+        else:
+            named.append(name)
+    base = views.get("latest")
+    if base:
+        shown.append("### latest (its fields and last only)\n\n" + json.dumps({k: base.get(k) for k in ("fields", "last")}, indent=1))
+    rest = [f"too large to show here: {', '.join(named)}"] if named else []
+    rest += [f"every view in full: {file}" if file else f"every view in full: `orchestra query views show {subject}`",
+             f"every fact: `orchestra query facts --subject {subject}`"]
+    if shown or rest:
+        parts.append(f"## The views of {subject}\n\n" + "\n\n".join(shown) + "\n\n" + "\n".join(f"- {r}" for r in rest))
     return "\n\n".join(parts) + "\n"
 
 
@@ -121,7 +148,7 @@ def claude(model: str | None, *extra: str) -> list[str]:
 
 def once(prompt: Path, model: str | None, budget: Budget) -> int:
     rc = 0
-    for ev in events_in():
+    for ev in facts_in():
         if why := budget.why_not():
             line({"cost_usd": 0, "note": why, "skipped": True})
             continue
@@ -131,7 +158,7 @@ def once(prompt: Path, model: str | None, budget: Budget) -> int:
             line({"cost_usd": 0, "note": f"cannot start claude (Claude Code): {e}"})
             return 127
         try:
-            p.stdin.write(instructions(prompt) + "\n" + about(ev, item_of(ev)))
+            p.stdin.write(instructions(prompt) + "\n" + about(ev))
             p.stdin.close()
         except OSError:
             pass
@@ -178,7 +205,7 @@ def session(prompt: Path, model: str | None, budget: Budget) -> int:
         if why := budget.why_not():
             line({"cost_usd": 0, "note": why, "skipped": True})
             continue
-        msg = {"type": "user", "message": {"role": "user", "content": about(ev, item_of(ev))}}
+        msg = {"type": "user", "message": {"role": "user", "content": about(ev)}}
         done.clear()
         pending[0] = True
         try:
@@ -201,7 +228,7 @@ def session(prompt: Path, model: str | None, budget: Budget) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    a = argparse.ArgumentParser(prog="orchestra agent", description="One Claude Code turn per event (a program for a machine).")
+    a = argparse.ArgumentParser(prog="orchestra agent", description="One Claude Code turn per fact (a program for a machine).")
     a.add_argument("prompt", type=Path, help="the instructions file")
     a.add_argument("--model")
     a.add_argument("--per-day-usd", type=float, help="no turn is started past this much spent today")

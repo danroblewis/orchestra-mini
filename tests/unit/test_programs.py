@@ -16,7 +16,9 @@ from orchestra.runner import Runner
 
 TRIGGER = {"specversion": "1.0", "id": "e1", "type": "t.task.created", "source": "tracker", "subject": "T-1",
            "time": "2026-11-05T10:00:00.000Z", "data": {"title": "x"}}
-ITEM = {"subject": "T-1", "fields": {"title": "x", "size": 3}, "events": [TRIGGER]}
+VIEWS = {"latest": {"subject": "T-1", "fields": {"title": "x", "size": 3}, "last": "2026-11-05T10:00:00.000Z", "by_type": {"secret": 1}},
+         "ticket": {"subject": "T-1", "status": "In Review", "reviewer": "alice"},
+         "huge": {"subject": "T-1", "blob": "y" * 3000}}
 
 
 def wait_for(cond, timeout=15.0):
@@ -33,9 +35,9 @@ def project_with(make_project, machine: dict):
     return make_project({"machines": [machine]})
 
 
-def once(project, event=TRIGGER, item=ITEM):
+def once(project, event=TRIGGER, views=VIEWS):
     events = Events.for_project(project)
-    return start_run(project, project.config.machines[0], event, item, Publisher(events), metrics.for_project(project))
+    return start_run(project, project.config.machines[0], event, views, Publisher(events), metrics.for_project(project))
 
 
 def calls(seen):
@@ -43,7 +45,7 @@ def calls(seen):
 
 
 def turns(project, machine):
-    return sorted((r for r in runs.read(project, machine, 100) if "event" in r), key=lambda r: r["start"])
+    return sorted((r for r in runs.read(project, machine, 100) if "fact" in r), key=lambda r: r["start"])
 
 
 def test_an_agent_turn(make_project, fake_claude):
@@ -54,8 +56,13 @@ def test_an_agent_turn(make_project, fake_claude):
         "the event said twice (text and result) is published once"
     (call,) = calls(fake_claude)
     assert call["argv"] == ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--model", "sonnet"]
-    assert call["prompt"].startswith("You are the worker.") and '"id": "e1"' in call["prompt"] and "Saying what happened" in call["prompt"]
-    assert '"size": 3' in call["prompt"] and call["machine"] == call["source"] == "w"
+    prompt = call["prompt"]
+    assert prompt.startswith("You are the worker.") and '"id": "e1"' in prompt and "Saying what happened" in prompt
+    assert "## The fact" in prompt and '"size": 3' in prompt and call["machine"] == call["source"] == "w"
+    assert '"status": "In Review"' in prompt and "### ticket" in prompt, "each view but latest in full"
+    assert "too large to show here: huge" in prompt and "yyyy" not in prompt, "a view past 2 KB is named only"
+    assert "secret" not in prompt, "of latest only its fields and last"
+    assert call["views"] in prompt and "orchestra query facts --subject T-1" in prompt, "where to read the rest"
     assert "Working on it." in open(rec["log"]).read(), "what it says that is no line goes to its log"
 
 
@@ -69,7 +76,7 @@ def test_a_scheduled_agent_turn_has_no_event(make_project, fake_claude):
 def test_the_per_day_cap_holds_turns_until_tomorrow(make_project, fake_claude, monkeypatch):
     monkeypatch.setenv("FAKE_COST", "6")
     project = project_with(make_project, {"name": "w", "command": "orchestra agent w.md --per-day-usd 10", "on": "x"})
-    first, second, third = (once(project, item=None) for _ in range(3))
+    first, second, third = (once(project, views=None) for _ in range(3))
     assert first["cost_usd"] == second["cost_usd"] == 6.0
     assert third["skipped"] and "per_day_usd 10" in third["note"] and "tomorrow" in third["note"] and not third["cost_usd"]
     assert len(calls(fake_claude)) == 2
@@ -83,7 +90,7 @@ def test_an_agent_with_no_prompt_file_says_so(make_project, fake_claude):
 
 def test_a_decision(make_project, fake_claude, monkeypatch):
     project = project_with(make_project, {"name": "triage", "on": "t.task.created",
-                                          "command": 'orchestra decide "Is this real?" --answers real,noise --inputs title'})
+                                          "command": 'orchestra decide "Is this real?" --answers real,noise --inputs title,ticket:status'})
     rec = once(project)
     assert rec["exit"] == 0 and rec["cost_usd"] == 0.25 and rec["types"] == ["decision.made", "triage.real"]
     events = Events.for_project(project)
@@ -91,7 +98,8 @@ def test_a_decision(make_project, fake_claude, monkeypatch):
     assert made["data"] == {"machine": "triage", "answer": "real", "confidence": 0.9, "reason": "it looks real"}
     assert made["subject"] == named["subject"] == "T-1" and made["source"] == "triage"
     (call,) = calls(fake_claude)
-    assert '"title": "x"' in call["prompt"] and '"size"' not in call["prompt"] and "--json-schema" in call["argv"]
+    assert '"title": "x"' in call["prompt"] and '"ticket:status": "In Review"' in call["prompt"]
+    assert '"size"' not in call["prompt"] and "alice" not in call["prompt"] and "--json-schema" in call["argv"]
     monkeypatch.setenv("FAKE_CONFIDENCE", "0.3")
     once(project)
     assert [e["type"] for e in events.read(0)[0]][2:] == ["decision.made", "triage.unsure"]
@@ -122,7 +130,7 @@ def test_a_continuous_agent_keeps_one_session(make_project, fake_claude, monkeyp
     answered = [e for e in events.read(0)[0] if e["type"] == "agent.ping.answered"]
     assert [(e["subject"], e["source"]) for e in answered] == [("P-1", "pinger"), ("P-2", "pinger")]
     done = turns(project, "pinger")
-    assert [(t["subject"], t.get("cost_usd"), t.get("events"), t.get("points")) for t in done[:2]] == \
+    assert [(t["subject"], t.get("cost_usd"), t.get("facts"), t.get("points")) for t in done[:2]] == \
         [("P-1", 0.5, 1, 1), ("P-2", 0.5, 1, 1)], "each turn's own cost, from the session's running total"
     assert done[2]["subject"] == "P-3" and done[2]["skipped"] and "per_day_usd" in done[2]["note"], "past its cap: no turn today"
     started = json.loads((fake_claude / "continuous.json").read_text())
@@ -131,7 +139,11 @@ def test_a_continuous_agent_keeps_one_session(make_project, fake_claude, monkeyp
     assert "You answer pings." in argv[argv.index("--append-system-prompt") + 1]
     first, second = [json.loads(line) for line in (fake_claude / "messages.jsonl").read_text().splitlines()]
     assert first["type"] == "user" and first["message"]["role"] == "user"
-    assert '"subject": "P-1"' in first["message"]["content"] and "The item's state" in first["message"]["content"]
+    assert '"subject": "P-1"' in first["message"]["content"] and "The views of P-1" in first["message"]["content"]
+    assert '"title": "first"' in first["message"]["content"], "a continuous agent reads the views itself"
+    answered_first = next(e for e in events.read(0)[0] if e["type"] == "agent.ping.answered")
+    asked = next(e for e in events.read(0)[0] if e["type"] == "ping.sent" and e["subject"] == "P-1")
+    assert (answered_first["causedby"], answered_first["depth"]) == (asked["id"], 1), "stamped with the fact it answers"
     assert metrics.for_project(project).latest("pings_answered_total", {"project": "t", "machine": "pinger"})[1] == 2
 
 

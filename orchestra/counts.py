@@ -1,9 +1,10 @@
-"""Orchestra's count of the bus: every event counted by its type and source.
+"""Orchestra's count of the bus: every fact counted by its type and source (the series keeps its name).
 
-- ``orchestra_events_total{project, type, source}``: a cumulative counter per event type and
-  source. Events without a source are counted under ``source="unknown"``.
+- ``orchestra_events_total{project, type, source}``: a cumulative counter per fact type and
+  source. Facts without a source are counted under ``source="unknown"``. Renaming it would leave
+  discovery two copies of every flow over its window.
 
-Whether a counter is a flow, and of what, is discovery's business. Events can share an instant;
+Whether a counter is a flow, and of what, is discovery's business. Facts can share an instant;
 stores don't agree on the order of points that share one, so only the last value of each series
 at each instant is written (``collapse``)."""
 
@@ -28,7 +29,7 @@ def collapse(points: list[Point]) -> list[Point]:
 
 @dataclass
 class EventCollector:
-    """Counts events by (type, source). Feed it events in log order with ``observe``; it keeps
+    """Counts facts by (type, source). Feed it facts in log order with ``observe``; it keeps
     the running totals, so it can follow a live bus after a replay."""
 
     project: str
@@ -54,7 +55,7 @@ class BackfillReport:
 
 
 def backfill(events: list[dict], *, project: str, store: MetricsStore) -> BackfillReport:
-    """Replay a whole event log into the metrics store. The points are computed before anything
+    """Replay a whole log of facts into the metrics store. The points are computed before anything
     is deleted; when the write fails after the old counters were deleted it raises, never returns,
     and the caller replays again (the host retries until it succeeds), so the counters are never
     left deleted by a replay that said it was done."""

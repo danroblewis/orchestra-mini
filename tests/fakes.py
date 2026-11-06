@@ -1,9 +1,9 @@
 """A fake ``claude`` for ``orchestra agent`` and ``orchestra decide``, put on ``PATH``: it saves its arguments and prompt, and
 answers in the CLI's formats. With ``--json-schema`` it answers a decision (``FAKE_ANSWER``,
 ``FAKE_CONFIDENCE``). With ``--input-format stream-json`` it is a continuous agent: for each user
-message on stdin (saved to ``messages.jsonl``) it says an event about the message's event and a
+message on stdin (saved to ``messages.jsonl``) it says a fact about the message's fact and a
 metric line, and ends the turn with a result (repeating the text, as Claude Code does) whose ``total_cost_usd`` is the session's running
-total (``FAKE_COST`` a turn). Otherwise it streams one agent turn whose text says one event, prints
+total (``FAKE_COST`` a turn). Otherwise it streams one agent turn whose text says one fact, prints
 another outside the stream, runs ``FAKE_SHELL`` in a shell when set (a script the agent runs
 itself), and ends with a result costing ``FAKE_COST``."""
 
@@ -20,7 +20,7 @@ if "--input-format" in sys.argv:
         with (out / "messages.jsonl").open("a") as f:
             f.write(line)
         text = msg["message"]["content"]
-        ev = json.loads(text.split("## The event\n\n", 1)[1].split("\n\n## ", 1)[0])
+        ev = json.loads(text.split("## The fact\n\n", 1)[1].split("\n\n## ", 1)[0])
         total, n = total + cost, n + 1
         said = json.dumps({"type": "agent.ping.answered", "subject": ev.get("subject"), "data": {"turn": n}})
         measured = json.dumps({"metric": "pings_answered_total", "value": n, "kind": "counter"})
@@ -32,7 +32,7 @@ if "--input-format" in sys.argv:
 prompt = sys.stdin.read()
 n = len(list(out.glob("call-*.json")))
 (out / f"call-{n}.json").write_text(json.dumps({"argv": sys.argv[1:], "prompt": prompt,
-    "event": os.environ.get("ORCHESTRA_EVENT"), "item": os.environ.get("ORCHESTRA_ITEM"),
+    "event": os.environ.get("ORCHESTRA_FACT"), "views": os.environ.get("ORCHESTRA_VIEWS_FILE"),
     "machine": os.environ.get("ORCHESTRA_MACHINE"), "source": os.environ.get("ORCHESTRA_SOURCE")}))
 if "--json-schema" in sys.argv:
     answer = {"answer": os.environ.get("FAKE_ANSWER", "real"), "confidence": float(os.environ.get("FAKE_CONFIDENCE", "0.9")),
@@ -40,7 +40,7 @@ if "--json-schema" in sys.argv:
     print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": json.dumps(answer),
                       "structured_output": answer, "total_cost_usd": cost}))
     sys.exit(0)
-subject = json.loads(os.environ["ORCHESTRA_EVENT"]).get("subject") if os.environ.get("ORCHESTRA_EVENT") else None
+subject = json.loads(os.environ["ORCHESTRA_FACT"]).get("subject") if os.environ.get("ORCHESTRA_FACT") else None
 said = json.dumps({"type": "agent.work.done", "subject": subject, "data": {"ok": True}})
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}))
 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Working on it.\n" + said}]}}))

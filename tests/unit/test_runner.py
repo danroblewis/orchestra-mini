@@ -1,5 +1,6 @@
-"""The scheduler (orchestra/runner.py): once machines on their events and ticks, in order; continuous
-machines fed on an open stdin, their run lines making turns; the count of the bus."""
+"""The scheduler (orchestra/runner.py): once machines on their facts and ticks, in order, each run
+given its subject's views; continuous machines fed on an open stdin, their run lines making turns;
+causes stamped, deep facts held; the count of the bus."""
 
 from __future__ import annotations
 
@@ -62,6 +63,7 @@ def test_a_continuous_program_gets_three_events_over_time_on_one_open_stdin(make
             ev = json.loads(line)
             print(json.dumps({"type": "pong.sent", "subject": ev["subject"], "data": {"pid": os.getpid()}}), flush=True)
             print(json.dumps({"metric": "pongs_total", "value": n}), flush=True)
+            print(json.dumps({"cost_usd": 0}), flush=True)             # answered: the turn ends
     """})
     r = running(project)
     try:
@@ -73,6 +75,8 @@ def test_a_continuous_program_gets_three_events_over_time_on_one_open_stdin(make
             time.sleep(0.3)
         pongs = [e for e in events.read(0)[0] if e["type"] == "pong.sent"]
         assert [e["subject"] for e in pongs] == ["a", "b", "c"] and len({e["data"]["pid"] for e in pongs}) == 1, "one process"
+        pings = {e["subject"]: e["id"] for e in events.read(0)[0] if e["type"] == "ping.sent"}
+        assert [(e["causedby"], e["depth"]) for e in pongs] == [(pings[x], 1) for x in "abc"], "the oldest fact not answered"
         assert metrics.for_project(project).latest("pongs_total", {"project": "t", "machine": "echo"})[1] == 3
     finally:
         r.stop.set()
@@ -100,3 +104,56 @@ def test_collectors_ticks_and_the_count_of_the_bus(make_project):
     assert "chatter" in (project.state_dir / "logs" / "feed.log").read_text()
     assert next(e for e in events.read(0)[0] if e["type"] == "tick.ran")["data"] == {"event": ""}
     assert runs.read(project, "gauge")[0]["points"] == 2
+
+
+def test_a_once_run_gets_its_subjects_views_built_to_its_fact(make_project):
+    project = make_project({"machines": [{"name": "w", "command": "./w.py", "on": "t.task.*"}],
+                            "projections": [{"name": "count", "match": "T-*", "command": "p/count.py"}]}, **{
+        "p/count.py": """
+            import json, sys
+            n = {}
+            for line in sys.stdin:
+                f = json.loads(line)
+                n[f["subject"]] = n.get(f["subject"], 0) + 1
+            for s, k in n.items():
+                print(json.dumps({"subject": s, "n": k}))
+        """,
+        "w.py": """
+            import json, os, sys
+            fact = json.loads(sys.stdin.readline())
+            views = json.load(open(os.environ["ORCHESTRA_VIEWS_FILE"]))
+            print(json.dumps({"type": "w.saw.it", "subject": "seen", "data": {"seq": fact["seq"], "n": views["count"]["n"],
+                                                                             "latest": views["latest"]["facts"]}}))
+        """})
+    r = running(project)
+    try:
+        events = Events.for_project(project)
+        events.publish("t.task.made", subject="T-1", source="me")
+        events.publish("t.task.moved", subject="T-1", source="me")
+        assert wait_for(lambda: len([e for e in events.read(0)[0] if e["type"] == "w.saw.it"]) == 2)
+    finally:
+        r.stop.set()
+    for e in [e for e in events.read(0)[0] if e["type"] == "w.saw.it"]:
+        assert e["data"]["n"] >= e["data"]["seq"] and e["data"]["latest"] >= e["data"]["seq"], "views built to at least its fact"
+
+
+def test_a_fact_past_the_depth_limit_is_held(make_project):
+    project = make_project({"machines": [{"name": "echo", "command": "./e.py", "on": "loop.*"}]}, **{"e.py": """
+        import json, sys
+        f = json.loads(sys.stdin.readline())
+        print(json.dumps({"type": "loop.went.round", "subject": f.get("subject")}))
+    """})
+    r = running(project)
+    try:
+        events = Events.for_project(project)
+        events.publish("loop.went.round", subject="deep", source="me", id="d9", depth=9)
+        events.publish("loop.went.round", subject="edge", source="me", id="d8", depth=8)
+        assert wait_for(lambda: len(runs.read(project, "echo")) == 1)
+        time.sleep(1)
+    finally:
+        r.stop.set()
+    (rec,) = runs.read(project, "echo")
+    assert rec["subject"] == "edge" and rec["held"] == 1, "the depth-8 fact runs; what it writes, at 9, is held"
+    out = [e for e in events.read(0)[0] if e.get("causedby") == "d8"]
+    assert len(out) == 1 and out[0]["depth"] == 9
+    assert "held loop.went.round d9" in (project.state_dir / "logs" / "orchestra.log").read_text()

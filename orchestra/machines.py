@@ -1,5 +1,5 @@
 """Machines (SPEC §3): every machine in the config and every ``source`` heard on the bus (one
-Orchestra observes but doesn't run, such as a person), with the event types each published (and
+Orchestra observes but doesn't run, such as a person), with the fact types each published (and
 how many), what each listens for (a machine's ``on``), its command and how it runs
 (``continuous``, ``every``), when it was last heard, its name from ``orchestra.actor`` lines, and its runs."""
 
@@ -9,6 +9,7 @@ from collections import Counter
 
 from . import runs
 from .events import Events
+from .facts import read
 from .lines import ACTOR
 
 
@@ -25,7 +26,7 @@ def machines(project, events: Events | None = None) -> list[dict]:
         m.update(command=c.command, continuous=c.continuous, listens_for=list(c.on), every=c.every)
         done = runs.read(project, c.name, 10_000)
         m.update(runs=len(done), last_run=done[0] if done else None)
-    for ev in events.all(0):
+    for ev in read(events):
         src = ev.get("source")
         if not isinstance(src, str) or not src:
             continue

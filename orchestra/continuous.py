@@ -1,11 +1,12 @@
 """A continuous machine (SPEC §3): started when ``orchestra run`` starts, restarted when it exits,
-its stdin kept open. Each event it listens for is written to its stdin as one JSON line as it
-comes; events that come while it is restarting wait for it. Its stdout is read like any machine's
-(``output``).
+its stdin kept open. Each fact it listens for is written to its stdin as one JSON line as it
+comes; facts that come while it is restarting wait for it. Its stdout is read like any machine's
+(``output``), each fact it writes stamped with the oldest fact it was given and has not answered
+as its cause (exact for ``orchestra agent``, which takes one at a time).
 
 Its process's life is one run record. Each run line it prints ends a **turn**: one run record of
-its own, for the oldest event written and not yet answered, with the cost and note the line gives
-and the events and points since the last turn (``orchestra agent`` prints one per event)."""
+its own, for the oldest fact written and not yet answered, with the cost and note the line gives
+and the facts and points since the last turn (``orchestra agent`` prints one per fact)."""
 
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from collections import deque
 
 from . import command, runs
 from .events import now
-from .oneshot import environment
+from .oneshot import counts, environment, mark
 from .output import Output
 
 RESTART_S = 5.0
@@ -29,9 +30,9 @@ class Continuous:
         self.lock = threading.Lock()
         self.proc = None
         self.out: Output | None = None
-        self.waiting: list[dict] = []                 # events that came while it was not running
-        self.asked: deque[tuple[dict, str]] = deque()   # events written, waiting for their turn's run line
-        self.mark = (0, 0)
+        self.waiting: list[dict] = []                 # facts that came while it was not running
+        self.asked: deque[tuple[dict, str]] = deque()   # facts written, waiting for their turn's run line
+        self.mark = (0, 0, 0, 0, 0)
 
     def deliver(self, ev: dict) -> None:
         with self.lock:
@@ -48,17 +49,23 @@ class Continuous:
         except (OSError, ValueError):
             self.waiting.append(ev)                   # delivered when it is running again
 
+    def cause(self) -> dict | None:
+        """The oldest fact given and not yet answered."""
+        try:
+            return self.asked[0][0] or None
+        except IndexError:
+            return None
+
     def _turn(self, cost: float, note, skipped: bool) -> None:
         with self.lock:
             ev, start = self.asked.popleft() if self.asked else ({}, now())
-            events, points = self.out.events[self.mark[0]:], self.out.points - self.mark[1]
-            self.mark = (len(self.out.events), self.out.points)
+            done = counts(self.out, self.mark)
+            self.mark = mark(self.out)
             run_id = runs.new_id()
             self.out.salt = run_id
         runs.record(self.project, {
-            "id": run_id, "machine": self.machine.name, "continuous": True, "event": ev.get("id"),
-            "subject": ev.get("subject"), "start": start, "end": now(), "exit": 0, "events": len(events),
-            "types": sorted({e["type"] for e in events}), "points": points, "cost_usd": round(cost, 6),
+            "id": run_id, "machine": self.machine.name, "continuous": True, "fact": ev.get("id"),
+            "subject": ev.get("subject"), "start": start, "end": now(), "exit": 0, **done, "cost_usd": round(cost, 6),
             "note": str(note) if note else None, "log": str(self.log), **({"skipped": True} if skipped else {})})
 
     def keep_running(self) -> None:
@@ -69,13 +76,13 @@ class Continuous:
             try:
                 p = command.start(m.command, self.project.repo, self.log, environment(self.project, m, None, None, run_id))
             except (OSError, ValueError) as e:
-                runs.record(self.project, rec | {"end": now(), "exit": None, "events": 0, "note": str(e)})
+                runs.record(self.project, rec | {"end": now(), "exit": None, "facts": 0, "note": str(e)})
                 self.stop.wait(RESTART_S)
                 continue
             out = Output(self.project, self.publisher, self.store, m.name, salt=run_id,
-                         log=lambda t: command.log_to(self.log, t), prometheus=False, on_run=self._turn)
+                         log=lambda t: command.log_to(self.log, t), prometheus=False, on_run=self._turn, cause=self.cause)
             with self.lock:
-                self.proc, self.out, self.mark = p, out, (0, 0)
+                self.proc, self.out, self.mark = p, out, (0, 0, 0, 0, 0)
                 waiting, self.waiting = self.waiting, []
                 for ev in waiting:
                     self._write(ev)
@@ -86,7 +93,7 @@ class Continuous:
             with self.lock:
                 self.proc = None
                 self.asked.clear()
-            runs.record(self.project, rec | {"end": now(), "exit": code, "events": len(out.events), "points": out.points})
+            runs.record(self.project, rec | {"end": now(), "exit": code, **counts(out)})
             if not self.stop.is_set():
                 self.say(f"{m.name}: exited {code}; restarting in {RESTART_S:g}s")
             self.stop.wait(RESTART_S)

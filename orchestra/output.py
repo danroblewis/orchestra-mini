@@ -1,5 +1,11 @@
 """What a machine says on stdout (SPEC §2), one line at a time: a JSON object with ``metric`` and
-``value`` is a measurement, one with ``type`` an event, anything else goes to its log.
+``value`` is a measurement, one with ``type`` a fact, anything else goes to its log.
+
+Every fact a run writes is stamped in the envelope with its cause (SPEC §2): ``causedby``, the id
+of the fact that started the run (``cause``: for a continuous machine the oldest it was given and
+has not answered), unless the line names one itself, and ``depth``, its cause's plus one (0 with
+no cause: a scheduled run). A fact deeper than ``facts.MAX_DEPTH`` is recorded but held: no machine
+gets it, and ``held`` counts them for the run record.
 
 A once run whose first non-empty line is Prometheus text (a ``#`` line or a sample) is read as
 Prometheus text too: those lines are parsed together when the run ends and written only if it
@@ -19,6 +25,7 @@ import time
 from . import exposition, lines
 from .counts import collapse
 from .events import event_time
+from .facts import held
 from .metrics import Point
 
 PREFIX = "orchestra_"
@@ -85,16 +92,38 @@ def declared_kinds(project) -> dict[str, str]:
         return {}
 
 
-class Output:
-    """One run's (or one continuous machine's) stdout, read line by line. ``events`` and ``points``
-    say what it published and wrote; ``prometheus=False`` reads JSON lines only (an agent's text)."""
+def stamp(ev: dict, cause: dict | None, publisher) -> dict:
+    """``ev`` with ``causedby`` and ``depth``: the line's own ``causedby`` when it names one (its
+    depth from the bus), else ``cause``'s; depth 0 with neither."""
+    given = ev.get("causedby")
+    base = cause.get("depth") if cause else None
+    base = base if isinstance(base, int) and not isinstance(base, bool) else 0
+    if given and (not cause or given != cause.get("id")):
+        known = publisher.depth_of(given)
+        ev["depth"] = (known if known is not None else base if cause else -1) + 1
+    elif cause and cause.get("id"):
+        ev["causedby"], ev["depth"] = cause["id"], base + 1
+    else:
+        ev["depth"] = 0
+    return ev
 
-    def __init__(self, project, publisher, store, machine: str, salt: str = "", log=None, prometheus: bool = True, on_run=None):
+
+class Output:
+    """One run's (or one continuous machine's) stdout, read line by line. ``facts`` and ``points``
+    say what it published and wrote, ``repeats`` the repeats it skipped, ``restated`` the facts
+    that said again what the bus had (same type, subject and data), ``held`` the facts too deep to
+    deliver; ``prometheus=False`` reads JSON lines only (an agent's text). ``cause()`` gives the
+    fact that caused what it writes now, or None."""
+
+    def __init__(self, project, publisher, store, machine: str, salt: str = "", log=None, prometheus: bool = True, on_run=None,
+                 cause=None):
         self.project, self.publisher, self.store, self.machine = project, publisher, store, machine
         self.salt, self.log = salt, log or (lambda text: None)
         self.prom: list[str] | None = None if prometheus else []     # None: the first line decides
         self.t0 = time.time()
-        self.events: list[dict] = []
+        self.cause = cause or (lambda: None)
+        self.facts: list[dict] = []
+        self.repeats = self.restated = self.held = 0
         self.points = 0
         self.kinds: dict[str, str] = {}
         self.cost: float | None = None
@@ -126,7 +155,7 @@ class Output:
             if ev is None:
                 self.log(f"{s} skipped: {why}")
             else:
-                self.publish(ev)
+                self.publish(stamp(ev, self.cause(), self.publisher))
         elif self.prom is None and _prometheus_line(s):
             self.prom = [s]
         elif self.prom:
@@ -147,8 +176,16 @@ class Output:
         self.skipped = self.skipped or bool(raw.get("skipped"))
 
     def publish(self, ev: dict) -> None:
-        if self.publisher.publish(ev):
-            self.events.append(ev)
+        restated = self.publisher.said(ev)
+        done = self.publisher.publish(ev)
+        if done == lines.PUBLISHED:
+            self.facts.append(ev)
+            self.restated += restated
+            if held(ev):
+                self.held += 1
+                self.log(f"{ev['type']} {ev['id']} held: depth {ev['depth']} is past the limit; no machine gets it")
+        elif done == lines.REPEAT:
+            self.repeats += 1
 
     def write(self, points: list[Point]) -> None:
         if points:

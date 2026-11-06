@@ -1,7 +1,9 @@
-"""A once machine's run (orchestra/oneshot.py): the event on stdin, both line shapes, Prometheus
-text, the machine's env and a run line's cost."""
+"""A once machine's run (orchestra/oneshot.py): the fact on stdin, its subject's views in a file,
+both line shapes, Prometheus text, the machine's env, a run line's cost, and its cause stamped."""
 
 from __future__ import annotations
+
+import json
 
 from orchestra import metrics, runs
 from orchestra.events import Events
@@ -10,7 +12,8 @@ from orchestra.oneshot import start_run
 
 TRIGGER = {"specversion": "1.0", "id": "e1", "type": "t.task.created", "source": "tracker", "subject": "T-1",
            "time": "2026-11-05T10:00:00.000Z", "data": {"title": "x"}}
-ITEM = {"subject": "T-1", "fields": {"title": "x", "size": 3}, "events": [TRIGGER]}
+VIEWS = {"latest": {"subject": "T-1", "fields": {"title": "x", "size": 3}, "by_type": {}, "facts": 1},
+         "ticket": {"subject": "T-1", "status": "In Review"}}
 
 
 def setup(make_project, monkeypatch, machine: dict, **scripts):
@@ -19,32 +22,39 @@ def setup(make_project, monkeypatch, machine: dict, **scripts):
     return project, events, Publisher(events)
 
 
-def once(project, pub, event=TRIGGER, item=ITEM):
-    return start_run(project, project.config.machines[0], event, item, pub, metrics.for_project(project))
+def once(project, pub, event=TRIGGER, views=VIEWS):
+    return start_run(project, project.config.machines[0], event, views, pub, metrics.for_project(project))
 
 
-def test_a_program_gets_the_event_and_prints_both_line_shapes(make_project, monkeypatch):
+def test_a_program_gets_the_fact_and_its_views_and_prints_both_line_shapes(make_project, monkeypatch):
     project, events, pub = setup(make_project, monkeypatch, {"name": "p", "command": "./p.py", "on": "t.task.created"},
                                  **{"p.py": """
         import json, os, sys
         ev = json.loads(sys.stdin.readline())
+        views = json.loads(open(os.environ["ORCHESTRA_VIEWS_FILE"]).read())
         item = json.loads(os.environ["ORCHESTRA_ITEM"])
-        assert sys.stdin.read() == "", "one event, then stdin closed"
+        assert sys.stdin.read() == "", "one fact, then stdin closed"
         print("thinking")
         print(json.dumps({"type": "t.task.sized", "subject": ev["subject"],
-                          "data": {"size": item["fields"]["size"], "same": json.loads(os.environ["ORCHESTRA_EVENT"]) == ev,
+                          "data": {"size": views["latest"]["fields"]["size"], "same": json.loads(os.environ["ORCHESTRA_FACT"]) == ev
+                                   == json.loads(os.environ["ORCHESTRA_EVENT"]), "status": views["ticket"]["status"],
+                                   "item": item, "cause": [os.environ["ORCHESTRA_CAUSEDBY"], os.environ["ORCHESTRA_DEPTH"]],
                                    "project": os.environ["ORCHESTRA_PROJECT"], "as": os.environ["ORCHESTRA_SOURCE"]}}))
-        print(json.dumps({"metric": "task_size", "value": item["fields"]["size"], "labels": {"task": ev["subject"]}}))
+        print(json.dumps({"metric": "task_size", "value": views["latest"]["fields"]["size"], "labels": {"task": ev["subject"]}}))
     """})
     rec = once(project, pub)
-    assert (rec["exit"], rec["events"], rec["types"], rec["event"], rec["points"]) == (0, 1, ["t.task.sized"], "e1", 1)
+    assert (rec["exit"], rec["facts"], rec["types"], rec["fact"], rec["points"]) == (0, 1, ["t.task.sized"], "e1", 1)
+    assert json.loads(open(rec["views"]).read()) == VIEWS, "the exact views it saw, kept"
     (ev,), _ = events.read(0)
-    assert ev["source"] == "p" and ev["data"] == {"size": 3, "same": True, "project": "t", "as": "p"}
+    assert ev["source"] == "p" and ev["data"] == {"size": 3, "same": True, "status": "In Review", "project": "t", "as": "p",
+                                                  "item": {"subject": "T-1", "fields": {"title": "x", "size": 3}, "events": 1},
+                                                  "cause": ["e1", "1"]}
+    assert (ev["causedby"], ev["depth"]) == ("e1", 1)
     assert metrics.for_project(project).latest("task_size", {"project": "t", "machine": "p", "task": "T-1"})[1] == 3.0
     assert "thinking" in open(rec["log"]).read()
     assert runs.read(project, "p")[0]["id"] == rec["id"]
     again = once(project, pub)
-    assert again["events"] == 1, "each run's lines are new"
+    assert again["facts"] == 1, "each run's lines are new"
 
 
 def test_a_scheduled_collector_with_metric_lines(make_project, monkeypatch):
@@ -55,7 +65,7 @@ def test_a_scheduled_collector_with_metric_lines(make_project, monkeypatch):
             print(json.dumps({"metric": "queue_depth", "value": n, "labels": {"queue": q}, "kind": "gauge"}))
     """})
     rec = once(project, pub, None, None)
-    assert (rec["exit"], rec["events"], rec["points"], rec["event"]) == (0, 0, 2, None)
+    assert (rec["exit"], rec["facts"], rec["points"], rec["fact"]) == (0, 0, 2, None) and "views" not in rec
     store = metrics.for_project(project)
     assert store.latest("queue_depth", {"project": "t", "machine": "queues", "queue": "review"})[1] == 2.0
 
@@ -83,7 +93,7 @@ def test_the_machines_env_and_a_run_line(make_project, monkeypatch):
         print(json.dumps({"cost_usd": 0.15, "note": "a second call"}))
     """})
     rec = once(project, pub, None, None)
-    assert (rec["cost_usd"], rec["note"], rec["events"]) == (0.25, "a second call", 1)
+    assert (rec["cost_usd"], rec["note"], rec["facts"]) == (0.25, "a second call", 1)
     (ev,), _ = Events.for_project(project).read(0)
-    assert ev["data"] == {"greeting": "hi", "continuous": ""}
+    assert ev["data"] == {"greeting": "hi", "continuous": ""} and ev["depth"] == 0 and "causedby" not in ev, "a scheduled run: depth 0"
     assert runs.spent_today(project, "m") == 0.25
