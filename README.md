@@ -1,8 +1,8 @@
 # Orchestra
 
-A dumb system: an event bus, a metrics store, commands whose stdout it reads, items folded from
-events, processes it starts when the events they name arrive, and a system dynamics model guessed
-from the metrics. The whole design is [SPEC.md](SPEC.md), one page.
+A dumb system: an event bus, a metrics store, machines it runs (programs, AI agents, decisions:
+each reads events as JSON lines on stdin and writes events and metrics as JSON lines on stdout),
+items folded from events, and a system dynamics model guessed from the metrics. The whole design is [SPEC.md](SPEC.md), one page.
 
 ## Install
 
@@ -25,15 +25,17 @@ orchestra chat         # talk to the Supervisor: what's happening, and changes; 
 orchestra reset        # clear the data and start over (keeps the config); --yes to do it
 ```
 
-The config stays short and readable, so you can edit it by hand too. Secrets come from environment variables named in the config (`token_env: JIRA_TOKEN`). An agent
-process runs Claude Code with your own login and environment.
+The config stays short and readable, so you can edit it by hand too: one `machines:` list says
+what runs, on which events (`on:`), on a schedule (`every:`) or kept running (`mode: continuous`).
+Secrets come from environment variables named in the config (`token_env: JIRA_TOKEN`). An agent
+machine runs Claude Code with your own login and environment.
 
 ## Read
 
 ```bash
 orchestra events -n 20          # the latest events
 orchestra items                 # open items; orchestra items show <subject>
-orchestra runs                  # process runs
+orchestra runs                  # machine runs
 orchestra metrics               # series in the metrics store
 orchestra model                 # the discovered model
 ```

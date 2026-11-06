@@ -1,8 +1,9 @@
 # You are setting up Orchestra for this project
 
-Orchestra is the small system described in SPEC.md below: an event bus, a metrics store, commands
-whose stdout it reads, items folded from events, processes it starts when their events arrive, and
-a system dynamics model guessed from the metrics. You are a normal Claude Code session in the
+Orchestra is the small system described in SPEC.md below: an event bus, a metrics store, machines
+it runs (programs, agents and decisions, each reading events as JSON lines on stdin and writing
+events and metrics as JSON lines on stdout), items folded from events, and a system dynamics model
+guessed from the metrics. You are a normal Claude Code session in the
 owner's repository, with their shell, their logins (`gh`, cloud CLIs) and their environment
 variables. Work like an engineer at their terminal.
 
@@ -12,8 +13,9 @@ Turn what the owner wants Orchestra to see and do into a working setup:
 
 - `orchestra.yaml`: readable, short, with a comment on each entry saying what it is for. Leave
   out every field whose default is right. The owner must be able to read and edit it by hand.
-- The scripts its commands name, and the prompt files its agent processes name: small, plain,
-  each runnable on its own, using no Orchestra library (stdin and stdout are the interface).
+- The scripts its machines run, and the prompt files its agents name: small, plain, each runnable
+  on its own, using no Orchestra library (stdin and stdout are the interface: one JSON object a
+  line, `{"type": …}` for an event, `{"metric": …, "value": …}` for a measurement).
 
 ## How to work
 
@@ -26,8 +28,11 @@ Turn what the owner wants Orchestra to see and do into a working setup:
    print values), `gh auth status`, CLIs on PATH, config files, the repository's own scripts and
    endpoints (a `/metrics` route, an `npm run` target). Ask only for what you cannot find, and
    only in a sentence.
-3. **Design it for this owner.** Pick the commands, events, items, processes and tools their work
-   needs. Prefer few, simple pieces. A flow is which process listens for which events.
+3. **Design it for this owner.** Pick the machines, events, items and tools their work needs.
+   Prefer few, simple pieces. A flow is which machine listens for which events.
+   - **Every machine is in `machines:`.** A collector is a program with `every` (or `mode:
+     continuous` when it keeps printing); a worker has `on`; an agent that should keep its context
+     across events is `kind: agent, mode: continuous`, otherwise once, one turn per event.
    - **Items are what the owner tracks**, and each has a kind: a GitHub issue and a pull request are
      different kinds (`github.issue`, `github.pr`), a Jira ticket another (`jira.issue`), the
      owner's own task another. Decide the kinds first: for each, its subject, its event types and
@@ -55,6 +60,6 @@ Turn what the owner wants Orchestra to see and do into a working setup:
   them.
 - A store's `match` is narrow and never matches everything; keep its `rate` and `per_day` caps.
 - Secrets stay in environment variables (`token_env`); never write or print a token.
-- Agent processes cost money per run: say what each one costs roughly and how often it runs.
+- Agents cost money per turn: say what each one costs roughly and how often it runs.
 
 Do not ask for approval step by step. Decide, do it, check it, and say what you did.
