@@ -677,8 +677,8 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
    taint; harness diffs per tool call; a checker that runs in a sandbox with no network and no
    credentials, and trusts `test_fixed` fully only when the test existed at baseline or came from
    another session (an agent that writes both the test and the fix can game it); a syntax-tree detector
-   for change facts, a checker for work facts, and a classifier for the why and the gaps, each fact
-   with `caused_by`.
+   for change facts, and a classifier for change types where no detector exists, each fact with
+   `caused_by`.
 4. Relevance-gated notices to running agents at their next write or submit; deltas on stdin for continuous programs, which can use them.
 5. Branch streams, and classification of the net change at merge.
 6. Claims with leases, as a `Map` type, for work allocation without a scheduler.
