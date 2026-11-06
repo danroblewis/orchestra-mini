@@ -32,14 +32,17 @@ class Machine:
     command: str = field(default="", metadata=REQ)
     on: list[str] = field(default_factory=list, metadata=LIST)
     every: float | None = field(default=None, metadata=DUR)
-    continuous: bool = False             # kept running, stdin open; else once: one run per event or tick
+    continuous: bool = False             # kept running, stdin open; else once: one run per fact or tick
     env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
-class Reducer:
-    match: str = field(default="", metadata=REQ)
-    command: str = field(default="", metadata=REQ)
+class Projection:
+    name: str = field(default="", metadata=REQ)
+    command: str = field(default="", metadata=REQ)      # reads facts on stdin, prints views (SPEC §6)
+    match: list[str] = field(default_factory=list, metadata={"required": True, "names": True})   # subject globs
+    types: list[str] = field(default_factory=list, metadata=LIST)   # only these types reach it (default: all)
+    whole: bool = False                  # every matching fact on each build, one view per key it prints
 
 
 @dataclass
@@ -55,7 +58,7 @@ class Config:
     metrics_store: str = "file"
     stores: list[Store] = field(default_factory=list)
     machines: list[Machine] = field(default_factory=list)
-    items: list[Reducer] = field(default_factory=list)
+    projections: list[Projection] = field(default_factory=list)
     discovery: Discovery = field(default_factory=Discovery)
 
     def machine(self, name: str) -> Machine | None:
@@ -63,3 +66,6 @@ class Config:
 
     def store(self, name: str) -> Store | None:
         return next((s for s in self.stores if s.name == name), None)
+
+    def projection(self, name: str) -> Projection | None:
+        return next((p for p in self.projections if p.name == name), None)

@@ -87,6 +87,11 @@ def test_orchestra_home_moves_the_overlay_and_state(make_project):
     ({"machines": [{"name": "w", "command": "x"}]}, r"say when it runs: on, every, or continuous: true"),
     ({"machines": [{"name": "w", "command": "x", "continuous": True, "every": "1m"}]}, r"never scheduled"),
     ({"machines": [{"name": "t", "command": "a", "on": "x"}, {"name": "t", "command": "b", "on": "x"}]}, r"given twice"),
+    ({"items": [{"match": "task/*", "command": "r.py"}]}, r"^items: is now projections: .*sort by time"),
+    ({"projections": [{"name": "latest", "match": "*", "command": "x"}]}, r"projections\[latest\]\.name: .*not latest"),
+    ({"projections": [{"name": "r", "command": "x"}]}, r"projections\[r\]\.match: required"),
+    ({"projections": [{"name": "r", "match": "*", "command": "x", "whole": "yes"}]}, r"whole: expected true or false"),
+    ({"projections": [{"name": "r", "match": "*", "command": "x"}, {"name": "r", "match": "*", "command": "y"}]}, r"given twice"),
 ])
 def test_refusals_name_the_path(raw, message):
     with pytest.raises(ConfigError, match=message):
@@ -117,3 +122,16 @@ def test_on_is_a_key_not_a_boolean(make_project):
         "machines:\n  - name: w\n    command: orchestra agent w.md --model yes\n    on: [a.b.c]\n    continuous: true\n")
     (w,) = load(make_project.repo).config.machines
     assert w.on == ["a.b.c"] and w.continuous is True and w.command.endswith("--model yes")
+
+
+def test_projections_and_the_old_items_refused_as_old():
+    from orchestra.config import OldConfig
+    c = build_config({"projections": [{"name": "ticket", "match": "ABC-*", "command": ".orchestra/projections/ticket.py"},
+                                      {"name": "ticket_prs", "match": ["ABC-*", "acme/api/pull/*"], "types": ["jira.issue.*"],
+                                       "whole": True, "command": "x"}]})
+    t, tp = c.projections
+    assert (t.match, t.types, t.whole) == (["ABC-*"], [], False) and (tp.match, tp.types, tp.whole) == (
+        ["ABC-*", "acme/api/pull/*"], ["jira.issue.*"], True)
+    assert c.projection("ticket") is t
+    with pytest.raises(OldConfig):
+        build_config({"items": []})

@@ -18,6 +18,10 @@ class ConfigError(Exception):
     pass
 
 
+class OldConfig(ConfigError):
+    """A config written for an earlier Orchestra that the Supervisor can rewrite (``items:``)."""
+
+
 UNITS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 SECRET_KEYS = re.compile(r"(^|_)(token|password|passwd|secret|api_key|apikey)$")
 SECRET_VALUES = re.compile(r"(sk-ant-|sk-[A-Za-z0-9]{20}|ghp_|github_pat_|xox[abprs]-|AKIA[0-9A-Z]{16}|Bearer\s+\S)")
@@ -111,7 +115,7 @@ def label(entry: Any, i: int) -> str:
     return entry.get("name") if isinstance(entry, dict) and entry.get("name") else str(i)
 
 
-LISTS = {"stores": schema.Store, "machines": schema.Machine, "items": schema.Reducer}
+LISTS = {"stores": schema.Store, "machines": schema.Machine, "projections": schema.Projection}
 AGENT = "an agent is a program now: command: orchestra agent <prompt file> [--model M] [--per-day-usd N]"
 DECIDE = 'a decision is a program now: command: orchestra decide "<question>" --answers a,b [--inputs f] [--min-confidence 0.6]'
 GONE = {    # what the config said before 2026-11-05, and what says it now (the owner: a machine has four fields)
@@ -122,13 +126,18 @@ GONE = {    # what the config said before 2026-11-05, and what says it now (the 
 GONE_MACHINE = {
     "kind": AGENT + "; " + DECIDE, "prompt": AGENT, "model": AGENT, "per_day_usd": AGENT,
     "question": DECIDE, "answers": DECIDE, "inputs": DECIDE, "min_confidence": DECIDE,
-    "mode": "gone: continuous: true keeps it running; without it a machine runs once per event or tick",
+    "mode": "gone: continuous: true keeps it running; without it a machine runs once per fact or tick",
     "tools": GONE["tools"], "timeout": "gone: a once run is stopped after an hour",
 }
+ITEMS = ("items: is now projections: (SPEC §6): a reducer is a projection, - {name: <name>, match: <subject glob>, "
+         "command: <its command>}, given every fact of the subjects being built in log order (not time order: "
+         "sort by time if it relied on that), printing one line per subject, {\"subject\": ..., ...}")
 GONE_STORE = {k: "gone: the adapter's now: command: orchestra-prometheus <url> --token-env NAME" for k in ("url", "token_env", "auth")}
 
 
 def _gone(raw: dict) -> None:
+    if "items" in raw:
+        raise OldConfig(ITEMS)
     for key, why in GONE.items():
         if key in raw:
             raise ConfigError(f"{key}: {why} (SPEC §1)")
@@ -164,7 +173,7 @@ def _env(at: str, env: dict[str, str]) -> None:
 
 def check(cfg: schema.Config) -> None:
     """What the types alone don't say: names unique, when each machine runs, a narrow match."""
-    for key in ("stores", "machines"):
+    for key in ("stores", "machines", "projections"):
         names = [e.name for e in getattr(cfg, key)]
         if dup := sorted({n for n in names if names.count(n) > 1}):
             raise ConfigError(f"{key}: the name {dup[0]!r} is given twice")
@@ -175,6 +184,11 @@ def check(cfg: schema.Config) -> None:
         if not (m.continuous or m.on or m.every):
             raise ConfigError(f"{at}: say when it runs: on, every, or continuous: true")
         _env(at, m.env)
+    for p in cfg.projections:
+        if p.name == "latest" or not re.fullmatch(r"[A-Za-z0-9_-]+", p.name):
+            raise ConfigError(f"projections[{p.name}].name: letters, digits, _ and - only, and not latest (the built-in one)")
+        if not p.match:
+            raise ConfigError(f"projections[{p.name}].match: name the subjects, a glob or a list of them")
     for s in cfg.stores:
         if re.fullmatch(r"\{\s*(__name__\s*=~\s*[\"']\.[*+][\"']\s*)?\}", s.match.strip()):
             raise ConfigError(f"stores[{s.name}].match: a match-everything selector is refused")
