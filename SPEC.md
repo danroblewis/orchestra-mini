@@ -1,10 +1,13 @@
 # Orchestra, minimal
 
-Orchestra is a dumb system. It keeps an **event bus** and a **metrics store**, runs **machines**
-(commands: events in as JSON lines on stdin, events and metrics out as JSON lines on stdout), reads
-other **stores** through adapters, folds events into **items**, and guesses a **system dynamics
-model** from the metrics. Everything a team does lives in its own scripts and prompts; Orchestra
-only runs them, records what they say, and shows it.
+Orchestra is an append-only **event log**, folded into **items** by subject, and a **metrics
+store**, readable together with remote stores through **adapters**. It runs **machines** on a
+schedule, on events, or continuously: a machine reads events as JSON lines on stdin and writes
+events and metrics as JSON lines on stdout, and Orchestra feeds its stdin and routes its stdout.
+From what it records, Orchestra knows who acts and discovers a **system dynamics model** from the
+metrics. Everything a team does lives in its own scripts and prompts; Orchestra only runs them,
+records what they say, and shows it. The six contracts are listed at the top of README.md; this
+file states each exactly.
 
 The owner, 2026-11-05: "This should be so damn simple that someone could read the whole config and
 even edit it by hand." "Most of our interface is 'run a command' and 'parse the stdout'."
