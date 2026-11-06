@@ -159,6 +159,59 @@ calibration (how often an agent's work lands), for spotting wasted work, and for
 agent what was tried. So there are two moments to classify: cheaply, per window on the branch, as a
 running account others can watch; and once, at merge, for the facts that count.
 
+### One agent, several items
+
+An agent's run produces one item for certain, its session, and facts on any number of others. That
+is normal: any replica writes many keys. What CRDTs don't give by default is **atomicity across
+items**: another replica may see "ticket A closed" before "ticket B opened as its replacement",
+because each item converges on its own. Two standard answers exist, and Orchestra's shape already
+takes the first:
+
+- **One document, many objects.** In Automerge and Yjs one document holds many objects, and one
+  change may touch several of them atomically. Orchestra is one log with items as projections by
+  subject; the facts of one turn can share a transaction id, applied together or not at all.
+- **Transactions over separate CRDTs.** AntidoteDB gives transactions across CRDT objects with
+  atomic visibility and causal order, without coordination ("causal consistency with atomic
+  visibility").
+
+Event sourcing adds the nuance that one event should not belong to two aggregates: so one fact per
+item, linked by a shared cause. The session is the evidence; every fact on another item has
+`caused_by` pointing into it. The session is the source of those changes, not their container.
+
+### Forks and merges
+
+A CRDT's history is a DAG of changes, like git's, and a version is a set of heads:
+
+- **Forking with history is cheap.** Copy the changes; Automerge's `fork()` does it, and can fork
+  from a past version (the document as it was at given heads). Yjs can, from snapshots, if history
+  is kept rather than garbage-collected.
+- **Merging a fork back is a union of changes** and never stops on a conflict: concurrent writes to
+  one value are kept side by side for something to resolve.
+- **Merging two CRDTs that never shared history** works mechanically (the merge is defined on any
+  two states), with one catch: **independent creation**. If two documents each created "the items
+  list", the merge sees two competing objects under one key, and one wins. The cure is naming
+  things by stable ids, which Orchestra's subjects already are (`owner/repo/issues/42`): two
+  Orchestras that each saw the issue merge their facts onto the same item.
+
+The closest prior work is Ink & Switch's: Upwelling (drafts for writers over a CRDT, merged when
+ready) and Patchwork (branches, diffs, history and merges for any Automerge document). Their main
+finding is the same as section 3's: merging the data is solved; showing what changed, and deciding
+when a branch's changes count, is the hard part. That is merge-time classification.
+
+| CRDT idea | Orchestra |
+|---|---|
+| a replica's change log | an agent's session log, wrapped |
+| fork at some heads | the agent reads an item; its Read result records the version it forked from |
+| working on a fork | the agent working on a branch, its facts on the branch's stream |
+| merge, keeping conflicts | the branch merged, its net change classified into facts on main |
+| an abandoned fork | an unmerged branch: an attempt, kept, never on main |
+| atomic visibility | a turn's facts sharing a transaction id |
+| merging unrelated documents | two Orchestras syncing, safe because subjects are stable ids |
+
+So an agent run is a fork of the items it touches plus one new item, its session: the harness is a
+machine that produces the session item outright, and proposes changes to other items through a
+fork that reaches main only by a merge.
+
 ## 6. Each coordination problem, solved
 
 **Stale context (1).** A running agent's stdin keeps receiving the facts that touch its item while
