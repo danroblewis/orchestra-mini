@@ -22,6 +22,12 @@ ABC-123  comment c501 "is this safe?"  by bob  2026-11-05 10:00
 ABC-123  status In Progress -> In Review by alice 2026-11-05 10:05
 ```
 
+Times compare as strings because every time here is ISO 8601 in UTC, as Jira Data Center returns
+them with `+0000`; a real collector would parse them. One more real-world limit: a search with
+`expand=changelog` returns at most the latest 100 histories per issue; a collector backfilling a
+long-lived ticket reads `/rest/api/2/issue/<key>/changelog` (Cloud) or the issue with
+`expand=changelog` (Data Center) for the rest.
+
 The Jira API used by every collector is the same: `GET /rest/api/2/search?jql=project=ABC AND
 updated >= "<cursor>"&expand=changelog&fields=summary,status,assignee,labels,comment`. It returns
 each ticket's current fields and its changelog (`histories[]`, each with `created`, `author` and
@@ -48,13 +54,21 @@ def search(jql):
         if start >= page["total"] or not page["issues"]:
             return
 
-def cursor(path, new=None):          # the collector's own memory: the last time it read up to
+from datetime import datetime, timedelta, timezone
+
+def cursor(path, new=None):          # the collector's own memory: the time it last read up to (ISO, UTC)
     if new is not None:
         open(path, "w").write(new)
     try:
         return open(path).read().strip()
     except FileNotFoundError:
-        return "-7d"
+        return (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+
+def jql_time(iso):                   # Jira's JQL takes "yyyy-MM-dd HH:mm"
+    return iso[:10] + " " + iso[11:16]
+
+def next_cursor(overlap_minutes=10):  # now, less an overlap; repeated facts are dropped by their ids
+    return (datetime.now(timezone.utc) - timedelta(minutes=overlap_minutes)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
 
 def emit(line):
     print(json.dumps(line), flush=True)
@@ -72,9 +86,9 @@ up.
 ```python
 import jira
 since = jira.cursor(".cursor")
-for issue in jira.search(f'project = ABC AND updated >= "{since}"'):
+for issue in jira.search(f'project = ABC AND updated >= "{jira.jql_time(since)}"'):
     jira.emit({"type": "jira.issue.changed", "subject": issue["key"], "time": issue["fields"]["updated"]})
-jira.cursor(".cursor", new="-5m")
+jira.cursor(".cursor", new=jira.next_cursor())
 ```
 
 **stdout of the collector:**
@@ -122,14 +136,14 @@ Every event carries the whole entity as it is now. The latest snapshot is the st
 ```python
 import jira
 since = jira.cursor(".cursor")
-for issue in jira.search(f'project = ABC AND updated >= "{since}"'):
+for issue in jira.search(f'project = ABC AND updated >= "{jira.jql_time(since)}"'):
     f = issue["fields"]
     jira.emit({"type": "jira.issue.snapshot", "subject": issue["key"], "time": f["updated"],
                "data": {"summary": f["summary"], "status": f["status"]["name"],
                         "assignee": (f["assignee"] or {}).get("name"), "labels": f["labels"],
                         "comments": [{"id": c["id"], "by": c["author"]["name"], "text": c["body"]}
                                      for c in f["comment"]["comments"]]}})
-jira.cursor(".cursor", new="-5m")
+jira.cursor(".cursor", new=jira.next_cursor())
 ```
 
 **stdout of the collector** (one line per poll that saw it changed):
@@ -182,7 +196,7 @@ import jira
 FACTS = {"status": "status_changed", "assignee": "assigned", "labels": "labelled"}
 
 since = jira.cursor(".cursor")
-for issue in jira.search(f'project = ABC AND updated >= "{since}"'):
+for issue in jira.search(f'project = ABC AND updated >= "{jira.jql_time(since)}"'):
     key, f = issue["key"], issue["fields"]
     if f["created"] >= since:                         # created within this window
         jira.emit({"type": "jira.issue.created", "subject": key, "id": f"{key}:created", "time": f["created"],
@@ -207,7 +221,7 @@ for issue in jira.search(f'project = ABC AND updated >= "{since}"'):
             jira.emit({"type": "jira.issue.commented", "subject": key, "id": f"{key}:comment:{c['id']}",
                        "time": c["created"], "source": f"person.jira.{c['author']['name']}",
                        "data": {"jira": {"comments": {c["id"]: {"by": c["author"]["name"], "text": c["body"]}}}}})
-jira.cursor(".cursor", new="-10m")                    # overlap; ids make repeats harmless
+jira.cursor(".cursor", new=jira.next_cursor())        # overlap; ids make repeats harmless
 ```
 
 **stdout of the collector** (the history above, one fact per change):
@@ -301,10 +315,10 @@ def stamped_state(issue):
     return st
 
 since = jira.cursor(".cursor")
-for issue in jira.search(f'project = ABC AND updated >= "{since}"'):
+for issue in jira.search(f'project = ABC AND updated >= "{jira.jql_time(since)}"'):
     jira.emit({"type": "jira.issue.state", "subject": issue["key"], "time": issue["fields"]["updated"],
                "data": {"jira": stamped_state(issue)}})
-jira.cursor(".cursor", new="-5m")
+jira.cursor(".cursor", new=jira.next_cursor())
 ```
 
 **stdout of the collector:**
