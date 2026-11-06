@@ -168,11 +168,16 @@ Two rules make derived facts safe in a CRDT:
    everything counted from it (the system dynamics model's flows included) is a projection,
    rebuilt. Every other fact carries a globally unique id (a UUID, not a local sequence).
 2. **Facts that replay and facts that describe are different.** A `function_renamed` produced by a
-   rename tool (or recognised exactly by a syntax-tree diff) can be applied again on top of someone
-   else's change: in the lab's one hand-built pair, a rename and a change to the same function's
-   body gave the same tree in either order, where the text patches conflicted. Replay depends on
-   semantic tools, which today reformat code a little and lack operations (renaming a parameter,
-   removing a test). A `test_fixed` derived from a session describes an edit made as text, and git still
+   rename tool can be applied again on top of someone else's change, but only if it is stored as an
+   *intent* ("rename symbol S to N", re-executed on the new base, with preconditions such as "N is
+   free"), not as the change set it made at its base. The lab's one pair (a rename and a change to
+   the same function's body) commuted only through a hand-written rename map, an operational
+   transform written for that pair; a body that mentions the renamed function breaks it, and the
+   text baseline was `git merge-file`, not a structured merge tool (Mergiraf, Spork, jDime), which
+   would likely have merged the pair too. And `function_body_changed` holding a whole new body is a
+   register write: two agents' body edits become a conflict, worse than git's line merge. Replay
+   also depends on semantic tools, which today reformat code a little and lack operations (renaming
+   a parameter, removing a test). A `test_fixed` derived from a session describes an edit made as text, and git still
    merges that text. So for code, derived facts mostly describe, and the merge of the code stays in
    git unless a fact replays. The CRDT's own territory is the shared record that is not code:
    items, claims, findings, statuses, the model.
@@ -235,6 +240,20 @@ Every field type merges on its own:
 | `Counter` | increments add | pages sent, retries, rounds |
 | `Text` (later, only if needed) | character-level merge | a shared prose document |
 
+Code facts need the same table, pair by pair:
+
+| | rename S | add parameter to S | change S's body | add call to S |
+|---|---|---|---|---|
+| **rename S** | conflict if the names differ | transform (apply to the new name) | transform; conflict if the body mentions S | transform: rewrite the call, or conflict if it was written after with the old name |
+| **add parameter to S** | | conflict unless identical | commutes, unless the body uses the parameter | transform: the call needs the argument, or uses the default |
+| **change S's body** | | | conflict (a register) | commutes |
+
+Each new code fact type needs a transform against every other: the table grows as the square of
+the catalogue, and operational transformation's history (published transforms later shown to
+break its convergence property TP2, as Imine and others found) says each cell needs a proof or a
+property test (random pairs and triples on real repositories, applied in every order, comparing
+trees and test results).
+
 The stale-write guard matters most for fields agents write. Plain last-writer-wins lets an agent
 four minutes stale, writing `status: investigating` with a fresh clock, beat `resolved`; with the
 guard, that write didn't see `resolved`, so it becomes a conflict to resolve instead. Fields only
@@ -263,7 +282,14 @@ main's items. Main's items fold only main's facts.
 The merge is the fact that carries work across: at merge time, the net change that actually landed
 (main's before and after, so a rebase or a conflict resolution is accounted for, and a file deleted
 and restored three turns later is not) is classified once, and those facts are applied to main,
-each caused by the merge. A branch that is never merged stays a record of an attempt: useful for
+each caused by the merge. These are two different models, and the document should not pretend
+otherwise: a CRDT merge is a union of operations, while classifying the net diff throws the
+operations away and re-derives them from state. Where they meet, the branch's own facts from
+semantic tools are authoritative (a recorded `rename_symbol` is ground truth; the detector is a
+heuristic), so the merge also runs an **explanation check**: replay the branch's facts on the merge
+base, diff the result against the merged tree, and record what is left as `unexplained`, credited to
+whoever resolved the merge, not to the branch. That keeps a conflict resolution from being credited
+to the agent whose branch it was, and it catches the detector's mistakes. A branch that is never merged stays a record of an attempt: useful for
 calibration (how often an agent's work lands), for spotting wasted work, and for telling the next
 agent what was tried. So there are two moments to classify: cheaply, per window on the branch, as a
 running account others can watch; and once, at merge, for the facts that count.
@@ -297,13 +323,26 @@ A CRDT's history is a DAG of changes, like git's, and a version is a set of head
 - **Forking with history is cheap.** Copy the changes; Automerge's `fork()` does it, and can fork
   from a past version (the document as it was at given heads). Yjs has no fork as such: with
   garbage collection off, a snapshot can be restored into a new document.
-- **Merging a fork back is a union of changes** and never stops on a conflict: concurrent writes to
-  one value are kept side by side for something to resolve.
+- **Merging a fork back is a union of facts** and never stops on a conflict: concurrent writes to
+  one value are kept side by side for something to resolve. The union is of facts, not of what is
+  accepted: the home still re-decides and admission still rejects (sections 2 and 6).
 - **Merging two CRDTs that never shared history** works mechanically (the merge is defined on any
   two states), with one catch: **independent creation**. If two documents each created "the items
   list", the merge sees two competing objects under one key, and one wins. The cure is naming
   things by stable ids, which Orchestra's subjects already are (`owner/repo/issues/42`): two
   Orchestras that each saw the issue merge their facts onto the same item.
+
+**Code subjects are names, not identities.** `inventory.py::available` stops existing when it is
+renamed, which is the independent-creation problem again, inside code. Code facts need a
+symbol-lineage id (rename and move facts are edges between identities; Unison's content-addressed
+definitions are the extreme version), and they are keyed by tree hashes (or `git patch-id`), not
+commit ids, so they survive rebase and squash.
+
+For code conflicts the right model already exists: Pijul (after Mimram and Di Giusto's patch
+theory) records a conflict as a state, which a later patch depending on both sides resolves;
+`Choice` is the same idea for records. Darcs' `replace` patch is the original replayable rename,
+and its weaknesses carry over (lexical, not scope-aware, and a precondition that the new name is
+absent), as do Darcs 2's exponential merges when conflicts of conflicts accumulate.
 
 The closest prior work is Ink & Switch's: Upwelling (drafts for writers over a CRDT, merged when
 ready) and Patchwork (branches, diffs, history and merges for any Automerge document). Their main
@@ -315,7 +354,7 @@ when a branch's changes count, is the hard part. That is merge-time classificati
 | a replica's change log | an agent's session log, in the evidence store |
 | fork at some heads | the agent reads an item; its Read results record the heads it forked from (`deps`) |
 | working on a fork | the agent working on a branch, its facts on the branch's stream |
-| merge, keeping conflicts | the branch merged, its net change classified into facts on main |
+| merge, keeping conflicts (a union of operations) | the branch merged: its net change re-derived from state, checked against the branch's facts |
 | an abandoned fork | an unmerged branch: an attempt, kept, never on main |
 | atomic visibility | a turn's facts sharing a transaction id |
 | merging unrelated documents | two Orchestras syncing, safe because subjects are stable ids |
@@ -428,8 +467,14 @@ Most of the value may be in uses that need no merge at all:
   agent. Deterministic and cheap.
 - **Tripwires on the session log.** Cheap classifiers that spot looping, repeated failing edits, or
   "done" claimed with no test run, and stop or redirect the agent. Acted on, not recorded as facts.
-- **Fact-assisted rebase.** On a git conflict, replay the agent's replayable facts (renames, added
-  parameters) onto the new main and hand back only the remaining text hunks.
+- **Fact-assisted rebase.** On a git conflict, invert the agent's replayable facts, merge the text,
+  and replay them on the new main, handing back only the remaining hunks. This is RefMerge (Ellis,
+  Nadi and Dig, 2022; also MolhadoRef, IntelliMerge), whose evaluation found it removes some
+  conflicts and introduces others. Failed preconditions (the name is taken, a concurrent new call
+  uses the old name, two renames of one symbol) are conflicts, never silent results, and CI runs on
+  the replayed result: equal trees in either order is convergence, not correct code. Measure first
+  what share of agent-branch conflicts a structured merge tool leaves that replay would fix; if it is
+  small, code facts are for prevention (scope fences, scheduling), not merging.
 - **Scheduling.** Predict which symbols a task will touch from similar past tasks' facts, and run
   overlapping tasks one after another instead of in parallel.
 - **Review.** The reviewer reads the fact chain (named facts, why, checker verdicts) before the
