@@ -53,3 +53,18 @@ def test_chat_briefs_the_supervisor_with_what_is_happening_and_can_continue(tmp_
     assert args.startswith("--continue\n") and "You are this project's Supervisor" in args
     assert "# What is happening now" in args and "# SPEC.md" in args and "command: ./hello.sh" in args
     assert "error: machine hello: ./hello.sh not found" in args, "what orchestra run would say of it"
+
+
+def test_chat_on_a_config_of_an_earlier_orchestra_briefs_the_supervisor_to_rewrite_it(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "orchestra.yaml").write_text("items:\n  - match: task/*\n    command: ./r.py\n")
+    env = {**os.environ, "ORCHESTRA_HOME": str(tmp_path / "home")}
+    r = subprocess.run([sys.executable, "-m", "orchestra", "--repo", str(repo), "chat", "--print-prompt"],
+                       env=env, capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 0 and "the Supervisor rewrites it" in r.stderr
+    assert "You are this project's Supervisor" in r.stdout and "You are setting up Orchestra" not in r.stdout
+    assert "# Rewrite the config first" in r.stdout and "items: is now projections:" in r.stdout and "sort its stdin by `time`" in r.stdout
+    run = subprocess.run([sys.executable, "-m", "orchestra", "--repo", str(repo), "run", "--seconds", "0"],
+                         env=env, capture_output=True, text=True, timeout=60, check=False)
+    assert run.returncode == 1 and "items: is now projections:" in run.stderr

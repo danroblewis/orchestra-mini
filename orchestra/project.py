@@ -1,5 +1,5 @@
 """A project: its repository, its name, its config and its state directory
-(``<home>/<project>/``, beside the overlay: the bus and metrics files, runs, logs, items)."""
+(``<home>/<project>/``, beside the overlay: the bus and metrics files, views, runs, logs)."""
 
 from __future__ import annotations
 

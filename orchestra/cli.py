@@ -11,18 +11,17 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__, hooks, metrics, runs
-from .config import ConfigError
+from . import __version__, hooks, metrics
+from .config import ConfigError, OldConfig
 from .events import Events
-from .items import Items
-from .lines import Publisher, event
+from .lines import DUPLICATE, REPEAT, Publisher, fact
 from .project import load, repo_root
 
 PROGRAMS = """programs for machines (named in a machine's command):
   orchestra agent <prompt file> [--model M] [--per-day-usd N]
-      one Claude Code turn per event; a continuous machine's agent keeps one session
-  orchestra decide "<question>" --answers a,b,c [--inputs f,g] [--min-confidence 0.6] [--model M]
-      one answer per event: publishes decision.made and <machine>.<answer>"""
+      one Claude Code turn per fact; a continuous machine's agent keeps one session
+  orchestra decide "<question>" --answers a,b,c [--inputs proj:field,field] [--min-confidence 0.6] [--model M]
+      one answer per fact: publishes decision.made and <machine>.<answer>"""
 
 
 def cmd_run(args) -> int:
@@ -52,25 +51,34 @@ def cmd_run(args) -> int:
 
 
 def cmd_chat(args) -> int:
-    """The Supervisor; with no config yet, or one that doesn't load, briefed to set the project up."""
+    """The Supervisor; with no config yet, or one that doesn't load, briefed to set the project up;
+    with one written for an earlier Orchestra, briefed to rewrite it."""
     from . import setup
     from .config import Config
     from .project import Project
-    brief = "chat.md"
+    brief, migrate = "chat.md", None
     try:
         project = load(args.repo)
         if not project.files:
             brief = "setup.md"
     except ConfigError as e:
         root = (args.repo or repo_root()).resolve()
-        project, brief = Project(root.name, root, Config(), []), "setup.md"
-        print(f"orchestra chat: the config does not load yet ({e}); setting it up", file=sys.stderr)
-    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt, brief=brief, resume=args.resume)
+        project = Project(root.name, root, Config(), [])
+        if isinstance(e, OldConfig):
+            migrate = str(e)
+            print(f"orchestra chat: the config was written for an earlier Orchestra ({e}); the Supervisor rewrites it",
+                  file=sys.stderr)
+        else:
+            brief = "setup.md"
+            print(f"orchestra chat: the config does not load yet ({e}); setting it up", file=sys.stderr)
+    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt, brief=brief, resume=args.resume,
+                     migrate=migrate)
 
 
 def cmd_emit(args) -> int:
-    """One event, or one metric line, from the argument; its source is ``ORCHESTRA_SOURCE`` (a
-    machine's run sets it) unless the line names one."""
+    """One fact, or one metric line, from the argument; its source is ``ORCHESTRA_SOURCE`` (a
+    machine's run sets it) unless the line names one, and its cause ``ORCHESTRA_CAUSEDBY`` and
+    ``ORCHESTRA_DEPTH`` (a once run sets them; depth 0 without)."""
     import uuid
 
     from .output import metric, remember_kinds
@@ -93,107 +101,25 @@ def cmd_emit(args) -> int:
         metrics.for_project(project).write([point])
         print(f"{point.series} {point.value:g}")
         return 0
-    ev, why = event(raw, source, uuid.uuid4().hex)
+    ev, why = fact(raw, source, uuid.uuid4().hex)
     if ev is None:
         print(why, file=sys.stderr)
         return 2
-    fresh = Publisher(Events.for_project(project)).publish(ev)
-    print(ev["id"] + ("" if fresh else " (duplicate: already on the bus)"))
-    return 0
-
-
-def q_events(project, rest) -> int:
-    a = argparse.ArgumentParser(prog="orchestra query events")
-    a.add_argument("-n", type=int, default=20)
-    a.add_argument("--type")
-    a.add_argument("--subject")
-    o = a.parse_args(rest)
-    found = [e for e in Events.for_project(project).all(0) if (not o.type or e.get("type") == o.type)
-             and (not o.subject or e.get("subject") == o.subject)]
-    for e in found[-o.n:]:
-        print(json.dumps(e))
-    return 0
-
-
-def q_items(project, rest) -> int:
-    a = argparse.ArgumentParser(prog="orchestra query items")
-    a.add_argument("show", nargs="?", choices=["show"])
-    a.add_argument("subject", nargs="?")
-    a.add_argument("--kind", help="only this kind (github.pr, jira.issue)")
-    a.add_argument("--all", action="store_true", help="closed ones too")
-    a.add_argument("-n", type=int, default=20)
-    a.add_argument("--page", type=int, default=0)
-    o = a.parse_args(rest)
-    items = Items(project, Events.for_project(project))
-    if o.show:
-        item = items.get(o.subject or "")
-        if item is None:
-            print(f"no item {o.subject}", file=sys.stderr)
-            return 1
-        print(json.dumps(item, indent=2))
-        return 0
-    for i in items.list(closed=o.all, kind=o.kind)[o.page * o.n:(o.page + 1) * o.n]:
-        f = i.get("fields") or {}
-        print(f"{i['last']}  {i.get('kind') or '?'}  {i['subject']}  {i['type']}" + (f"  {f['title']}" if f.get("title") else "")
-              + ("  done" if i.get("done") else "") + (f"  waits on {f['waiting_on']}" if f.get("waiting_on") else ""))
-    return 0
-
-
-def q_metrics(project, rest) -> int:
-    for name, labels, pts in metrics.for_project(project).recent(rest[0] if rest else "", {"project": project.name}):
-        lab = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()) if k != "project")
-        print(f"{name}{{{lab}}} {pts[-1][1]:g}")
-    return 0
-
-
-def q_model(project, rest) -> int:
-    d = hooks.hook("discovery", "show")
-    if d is None:
-        print("discovery is not installed", file=sys.stderr)
-        return 2
-    return d.show(project, rest)
-
-
-def q_runs(project, rest) -> int:
-    a = argparse.ArgumentParser(prog="orchestra query runs")
-    a.add_argument("machine", nargs="?")
-    a.add_argument("-n", type=int, default=20)
-    o = a.parse_args(rest)
-    for r in runs.read(project, o.machine, o.n):
-        print("  ".join(filter(None, [
-            r.get("start"), r.get("machine"), f"exit {r.get('exit')}", f"{r.get('events', 0)} events",
-            f"{r['points']} points" if r.get("points") else "", f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "",
-            f"for {r['subject']}" if r.get("subject") else "", r.get("note")])))
-    return 0
-
-
-def q_promql(project, promql: str, rest) -> int:
-    a = argparse.ArgumentParser(prog="orchestra query '<promql>'")
-    a.add_argument("--store", help="ask this store (through its adapter) instead of the metrics store")
-    o = a.parse_args(rest)
-    if o.store:
-        from . import stores
-        return stores.query(project, promql, o.store)
-    end = time.time()
     try:
-        rows = metrics.for_project(project).query_range(promql, end - 3600, end, 60, {"project": project.name})
-    except metrics.MetricsError as e:
-        print(e, file=sys.stderr)
-        return 2
-    for labels, pts in rows:
-        if pts:
-            print(f"{json.dumps(labels)} {pts[-1][1]:g}")
+        depth = int(os.environ.get("ORCHESTRA_DEPTH") or 0)
+    except ValueError:
+        depth = 0
+    if os.environ.get("ORCHESTRA_CAUSEDBY") and not ev.get("causedby"):
+        ev["causedby"] = os.environ["ORCHESTRA_CAUSEDBY"]
+    ev["depth"] = depth if ev.get("causedby") else 0
+    done = Publisher(Events.for_project(project)).publish(ev)
+    print(ev["id"] + {DUPLICATE: " (duplicate: already on the bus)", REPEAT: " (a repeat: it says nothing new)"}.get(done, ""))
     return 0
-
-
-QUERIES = {"events": q_events, "items": q_items, "metrics": q_metrics, "model": q_model, "runs": q_runs}
 
 
 def cmd_query(args) -> int:
-    project = load(args.repo)
-    if args.what in QUERIES:
-        return QUERIES[args.what](project, args.rest)
-    return q_promql(project, args.what, args.rest)
+    from .queries import query
+    return query(load(args.repo), args.what, args.rest)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -212,16 +138,17 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--continue", dest="resume", action="store_true", help="carry on the last session in this folder")
     s.add_argument("--print-prompt", action="store_true", help="print the brief and stop")
     s.set_defaults(fn=cmd_chat)
-    s = sub.add_parser("emit", help="publish one event, or write one metric line, as ORCHESTRA_SOURCE")
+    s = sub.add_parser("emit", help="publish one fact, or write one metric line, as ORCHESTRA_SOURCE")
     s.add_argument("json")
     s.set_defaults(fn=cmd_emit)
-    s = sub.add_parser("query", help="events | items | metrics | model | runs | '<promql>' [--store NAME]",
-                       description="orchestra query events [-n N] [--type T] [--subject S]\n"
-                                   "orchestra query items [--kind K] [--all] [show SUBJECT]\n"
+    s = sub.add_parser("query", help="facts | views | check | metrics | model | runs | '<promql>' [--store NAME]",
+                       description="orchestra query facts [-n N] [--type T] [--subject S] [--trace ID]\n"
+                                   "orchestra query views [PROJECTION] [show SUBJECT] [--input SUBJECT] [--rebuild]\n"
+                                   "orchestra query check\n"
                                    "orchestra query metrics [prefix]\norchestra query model\n"
                                    "orchestra query runs [machine] [-n N]\norchestra query '<promql>' [--store NAME]",
                        formatter_class=argparse.RawDescriptionHelpFormatter)
-    s.add_argument("what", help="events, items, metrics, model, runs, or a PromQL query")
+    s.add_argument("what", help="facts, views, check, metrics, model, runs, or a PromQL query")
     s.add_argument("rest", nargs=argparse.REMAINDER)
     s.set_defaults(fn=cmd_query)
     return p

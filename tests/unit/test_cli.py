@@ -22,12 +22,12 @@ def test_the_four_commands_and_the_programs_apart(capsys):
     commands, programs = out.split("programs for machines")
     assert "orchestra agent <prompt file>" in programs and "orchestra decide" in programs and "agent" not in commands
     assert set(parser()._subparsers._group_actions[0].choices) == {"run", "chat", "emit", "query"}
-    for gone in ("init", "setup", "check", "events", "items", "metrics", "model", "runs", "tool", "endpoint", "reset"):
+    for gone in ("init", "setup", "check", "events", "items", "facts", "views", "metrics", "model", "runs", "tool", "endpoint", "reset"):
         with pytest.raises(SystemExit):
             main([gone])
 
 
-def test_emit_and_query_events_items_runs(make_project, capsys, monkeypatch):
+def test_emit_and_query_facts_views_runs(make_project, capsys, monkeypatch):
     make_project()
     repo = str(make_project.repo)
 
@@ -41,30 +41,90 @@ def test_emit_and_query_events_items_runs(make_project, capsys, monkeypatch):
     assert "duplicate" in capsys.readouterr().out
     assert run("emit", "{nope") == 2 and run("emit", '{"subject": "x"}') == 2
     capsys.readouterr()
-    assert run("query", "events", "--subject", "T-2") == 0
+    assert run("query", "facts", "--subject", "T-2") == 0
     (line,) = capsys.readouterr().out.splitlines()
-    assert json.loads(line)["source"] == "worker", "the source from the environment"
+    got = json.loads(line)
+    assert got["source"] == "worker" and got["seq"] == 2 and got["depth"] == 0, "the source from the environment"
     assert run("emit", '{"type": "t.task.noted", "subject": "T-3", "source": "person.tracker.bo"}') == 0
     capsys.readouterr()
-    assert run("query", "events", "--subject", "T-3") == 0 and json.loads(capsys.readouterr().out)["source"] == "person.tracker.bo"
-    assert run("query", "events", "-n", "1", "--type", "t.task.created") == 0
-    assert json.loads(capsys.readouterr().out)["subject"] == "T-1"
-    assert run("query", "items") == 0
+    assert run("query", "facts", "--subject", "T-3") == 0 and json.loads(capsys.readouterr().out)["source"] == "person.tracker.bo"
+    assert run("query", "facts", "-n", "1", "--type", "t.task.c*") == 0
+    assert json.loads(capsys.readouterr().out)["subject"] == "T-2"
+    assert run("query", "views") == 0
     out = capsys.readouterr().out
     assert "T-1" in out and "T-2" not in out
-    assert run("query", "items", "--kind", "t.task") == 0 and "T-1" in capsys.readouterr().out
-    assert run("query", "items", "--kind", "other") == 0 and capsys.readouterr().out == ""
-    assert run("query", "items", "show", "T-2") == 0 and json.loads(capsys.readouterr().out)["done"] is True
-    assert run("query", "items", "show", "T-9") == 1
+    assert run("query", "views", "--kind", "t.task") == 0 and "T-1" in capsys.readouterr().out
+    assert run("query", "views", "--kind", "other") == 0 and capsys.readouterr().out == ""
+    assert run("query", "views", "show", "T-2") == 0 and json.loads(capsys.readouterr().out)["latest"]["done"] is True
+    assert run("query", "views", "latest", "show", "T-2") == 0 and json.loads(capsys.readouterr().out)["behind"] == 0
+    assert run("query", "views", "show", "T-9") == 1
+    assert run("query", "views", "nope") == 1 and "no projection nope" in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        run("query", "items", "bogus")
+        run("query", "views", "latest", "bogus")
     runs.record(load(make_project.repo), {"id": "r1", "machine": "w", "start": "2026-11-05T10:00:00.000Z",
-                                          "exit": 0, "events": 2, "points": 3, "cost_usd": 0.5})
+                                          "exit": 0, "facts": 2, "points": 3, "cost_usd": 0.5})
     capsys.readouterr()
     assert run("query", "runs") == 0 and run("query", "runs", "w") == 0
     a, b = capsys.readouterr().out.strip().splitlines()
-    assert a == b == "2026-11-05T10:00:00.000Z  w  exit 0  2 events  3 points  $0.5000"
+    assert a == b == "2026-11-05T10:00:00.000Z  w  exit 0  2 facts  3 points  $0.5000"
     assert run("query", "model") == 1 and "no model yet" in capsys.readouterr().out
+
+
+def test_the_old_query_names_are_refused_with_the_new(make_project, capsys):
+    make_project()
+    for old, new in (("events", "facts"), ("items", "views")):
+        assert main(["--repo", str(make_project.repo), "query", old]) == 2
+        assert f"now orchestra query {new}" in capsys.readouterr().err
+
+
+def test_emit_in_a_run_is_stamped_with_its_cause(make_project, capsys, monkeypatch):
+    make_project()
+    repo = str(make_project.repo)
+    monkeypatch.setenv("ORCHESTRA_CAUSEDBY", "trigger-1")
+    monkeypatch.setenv("ORCHESTRA_DEPTH", "3")
+    assert main(["--repo", repo, "emit", '{"type": "chat.message.posted", "subject": "S"}']) == 0
+    capsys.readouterr()
+    assert main(["--repo", repo, "query", "facts"]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert (got["causedby"], got["depth"]) == ("trigger-1", 3) and "causedby" not in (got.get("data") or {})
+
+
+def test_query_facts_trace_walks_causedby_both_ways(make_project, capsys):
+    from orchestra.events import Events
+    p = make_project()
+    ev = Events.for_project(p)
+    ev.publish("a.b.c", id="root", depth=0)
+    ev.publish("a.b.d", id="mid", causedby="root", depth=1)
+    ev.publish("a.b.e", id="leaf", causedby="mid", depth=2)
+    ev.publish("a.b.f", id="aside", causedby="root", depth=1)
+    ev.publish("x.y.z", id="other")
+    assert main(["--repo", str(make_project.repo), "query", "facts", "--trace", "mid"]) == 0
+    assert [json.loads(x)["id"] for x in capsys.readouterr().out.splitlines()] == ["root", "mid", "leaf"]
+    assert main(["--repo", str(make_project.repo), "query", "facts", "--trace", "root"]) == 0
+    assert [json.loads(x)["id"] for x in capsys.readouterr().out.splitlines()] == ["root", "mid", "leaf", "aside"]
+    assert main(["--repo", str(make_project.repo), "query", "facts", "--trace", "nope"]) == 1
+
+
+def test_query_views_input_is_what_a_projection_is_given(make_project, capsys):
+    from orchestra.events import Events
+    p = make_project({"projections": [{"name": "review", "match": "pr/*", "types": ["gh.*"], "command": "p/review.py"},
+                                      {"name": "all", "match": "*", "whole": True, "command": "p/all.py"}]},
+                     **{"p/review.py": 'import json, sys\nfor l in sys.stdin:\n    f = json.loads(l)\n'
+                                       '    print(json.dumps({"subject": f["subject"], "last": f["type"]}))\n',
+                        "p/all.py": 'import json, sys\nn = sum(1 for _ in sys.stdin)\nprint(json.dumps({"key": "pr/1", "n": n}))\n'})
+    ev = Events.for_project(p)
+    for t, s in (("gh.pr.opened", "pr/1"), ("ci.check.failed", "pr/1"), ("gh.pr.opened", "pr/2"), ("gh.pr.approved", "pr/1")):
+        ev.publish(t, subject=s)
+    repo = str(make_project.repo)
+    assert main(["--repo", repo, "query", "views", "review", "--input", "pr/1"]) == 0
+    assert [json.loads(x)["type"] for x in capsys.readouterr().out.splitlines()] == ["gh.pr.opened", "gh.pr.approved"]
+    assert main(["--repo", repo, "query", "views", "all", "--input", "pr/1"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 4, "a whole projection: every matching fact"
+    assert main(["--repo", repo, "query", "views", "--rebuild", "show", "pr/1"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["review"]["last"] == "gh.pr.approved" and shown["all"]["n"] == 4 and set(shown) == {"latest", "review", "all"}
+    assert main(["--repo", repo, "query", "views", "review"]) == 0
+    assert [json.loads(x)["subject"] for x in capsys.readouterr().out.splitlines()] == ["pr/1", "pr/2"]
 
 
 def test_emit_a_metric_line(make_project, capsys, monkeypatch):
@@ -109,4 +169,4 @@ def test_run_makes_the_state_directory_and_prints_the_endpoint(make_project, cap
     assert not project.state_dir.exists()
     assert main(["--repo", str(make_project.repo), "run", "--seconds", "0.5"]) == 0
     out = capsys.readouterr().out
-    assert project.state_dir.is_dir() and "events endpoint http://127.0.0.1:" in out and "Authorization: Bearer " in out
+    assert project.state_dir.is_dir() and "facts endpoint http://127.0.0.1:" in out and "Authorization: Bearer " in out

@@ -1,6 +1,7 @@
 """Clearing a project's data (SPEC §5), something ``orchestra chat`` does when the owner asks:
 ``python -m orchestra.reset [--repo R] [--yes]``. It removes exactly ``DATA`` from the state
-directory (the bus and metrics files, items, runs, logs, the model, the stores' request logs) and
+directory (the bus and metrics files, the views, the old items file, runs, logs, the model, the
+stores' request logs) and
 keeps everything else there: the config overlay, the tokens, and the scripts and prompts kept
 beside them. Without ``--yes`` it says what would go. Refused while ``orchestra run`` runs."""
 
@@ -17,7 +18,7 @@ from pathlib import Path
 # overlay, scripts and prompts kept beside it, a cursor a script keeps) is the owner's and is never
 # touched (the owner, 2026-11-05: an earlier reset removed everything but a keep-list, and with it
 # the scripts the setup agent had put there).
-DATA = ("events.jsonl", "metrics.jsonl", "items.json", "cursor.json", "kinds.json", "endpoint.json", "web.json",
+DATA = ("events.jsonl", "metrics.jsonl", "views", "items.json", "cursor.json", "kinds.json", "endpoint.json", "web.json",
         "model", "runs", "logs", "stores")
 
 

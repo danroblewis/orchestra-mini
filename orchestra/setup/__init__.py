@@ -3,7 +3,8 @@
 file by hand, read it, maintain it, but I don't want to write the file or the scripts.")
 
 It runs ``claude`` interactively with a brief and the spec appended to its system prompt: ``setup.md``
-when there is no config yet or it doesn't load, else ``chat.md`` with what is happening now. Both get
+when there is no config yet or it doesn't load, else ``chat.md`` with what is happening now (and, for a
+config written for an earlier Orchestra, what to rewrite: ``MIGRATE``). Both get
 what is already here: the config's path and text, what ``orchestra run`` would say of it, the
 environment variables that look like credentials (by name only), ``gh``'s login state, and how to
 run Orchestra's own commands (``orchestra``, and the reset, ``<python> -m orchestra.reset``)."""
@@ -18,6 +19,19 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
+MIGRATE = """# Rewrite the config first
+
+The config was written for an earlier Orchestra, and `orchestra run` refuses it:
+
+    {why}
+
+Rewrite it before anything else, and say what you changed. Each `items:` reducer becomes a
+projection under `projections:` (SPEC §6) with a `name`, the same `match` and its `command`. A
+projection is given every fact of the subjects being built, in log order, not time order: if the
+reducer relied on time order, sort its stdin by `time`. It prints one JSON line per subject,
+`{{"subject": ..., ...}}`, not one object for one item. Test it on recorded facts
+(`orchestra query views NAME --input SUBJECT | <command>`), then run `orchestra query check`.
+"""
 CREDENTIAL_NAME = re.compile(r"(TOKEN|KEY|SECRET|PASSWORD|PAT|_URL|_HOST|_USER)$|^(GH|GITHUB|JIRA|SLACK|ANTHROPIC|AWS|GOOGLE)_")
 
 
@@ -61,32 +75,34 @@ def context(project) -> str:
 
 
 def now(project) -> str:
-    """What is happening: open items by kind, the latest runs and events, in a few lines."""
+    """What is happening: open subjects, the latest runs and facts, in a few lines."""
     root = project.repo
     o = [sys.executable, "-m", "orchestra", "--repo", str(root)]
-    parts = [("open items", o + ["query", "items", "-n", "15"]), ("latest runs", o + ["query", "runs"]),
-             ("latest events", o + ["query", "events", "-n", "15"])]
+    parts = [("open subjects", o + ["query", "views", "-n", "15"]), ("latest runs", o + ["query", "runs"]),
+             ("latest facts", o + ["query", "facts", "-n", "15"])]
     return "# What is happening now\n\n" + "\n".join(f"## {t}\n```\n{_run(cmd, root)[:2500]}\n```" for t, cmd in parts)
 
 
-def prompt(project, brief: str = "setup.md") -> str:
+def prompt(project, brief: str = "setup.md", migrate: str | None = None) -> str:
     pieces = [(HERE / brief).read_text(encoding="utf-8"), context(project)]
-    if brief == "chat.md":
+    if migrate:
+        pieces.insert(1, MIGRATE.format(why=migrate))
+    elif brief == "chat.md":
         pieces.append(now(project))
     return "\n\n".join(pieces + ["# SPEC.md\n\n" + (HERE / "SPEC.md").read_text(encoding="utf-8")])
 
 
 def run(project, message: str | None, print_only: bool = False, binary: str = "claude", brief: str = "setup.md",
-        resume: bool = False) -> int:
+        resume: bool = False, migrate: str | None = None) -> int:
     """Claude Code, interactive, briefed; ``resume`` carries on the last session in this folder."""
     if not shutil.which(binary):
         print(f"orchestra needs Claude Code ({binary}) on PATH: https://docs.claude.com/en/docs/claude-code", file=sys.stderr)
         return 2
-    text = prompt(project, brief)
+    text = prompt(project, brief, migrate)
     if print_only:
         print(text)
         return 0
     first = message or ("Set Orchestra up for this project. Start by asking me what I want it to watch and do."
-                        if brief == "setup.md" else None)
+                        if brief == "setup.md" else "Rewrite the config for this Orchestra." if migrate else None)
     cmd = [binary, *(["--continue"] if resume else []), "--append-system-prompt", text, *([first] if first else [])]
     return subprocess.call(cmd, cwd=project.repo)
