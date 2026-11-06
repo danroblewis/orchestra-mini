@@ -12,7 +12,7 @@ Fifty processors, interleaved, each running from seconds to thirty minutes, on s
 (tickets, PRs, incidents, tasks). These failures happen with any shared-snapshot design:
 
 1. **Stale context.** An agent reads at 10:00, reasons until 10:04, and writes as if 10:00 were
-   still true. Your outage status update is this.
+   still true. A status draft that misses the mitigation that landed while it was written is this.
 2. **Lost updates.** Two agents read version 41, both write a whole new version; the second
    silently erases the first's work.
 3. **Edit conflicts.** An agent's partial edit names text that changed since it read it (the Edit
@@ -202,17 +202,24 @@ and never restamped; it respects causality (a fact always sorts after the facts 
 which producers' wall clocks do not.
 
 ```python
-from orchestra_model import Entity, Fact, Register, Set, Map, Counter, Log, Choice
+from orchestra_model import Entity, Fact, Owned, Register, Set, Map, Counter, Log, Choice
 
 class Incident(Entity):                         # kind: incident, subject: incident/2026-11-05-payments
-    severity:  Choice[Literal["SEV3", "SEV2", "SEV1"]]   # one value; concurrent different values are kept and flagged
-    status:    Register[Literal["investigating", "mitigated", "resolved"]]   # latest wins, unless the writer hadn't seen the current value
-    commander: Register[str | None]
+    roles:     Map[str, Owned[str, "commander"]]                     # commander, ops, comms, scribe
+    severity:  Owned[Literal["SEV3", "SEV2", "SEV1"], "commander"]   # one value at every moment; others propose
+    status:    Owned[Literal["investigating", "mitigated", "resolved"], "commander"]
     responders: Set[str]                        # add and remove commute; a concurrent add beats a remove
-    timeline:  Log[TimelineEntry]               # append-only, ordered by event time
+    timeline:  Log[TimelineEntry]               # append-only, by the evidence's wall-clock time, correctable
     findings:  Map[str, Finding]                # keyed parts: each agent writes its own keys
     pages_sent: Counter                         # concurrent increments add up
-    draft_update: Register[str]                 # the status update, kept current
+    draft_update: Owned[str, "comms"]           # the status update; flagged if a fact landed after its deps
+
+class Finding(Entity):
+    text: Register[str]
+    status: Register[Literal["hypothesis", "supported", "refuted"]]   # a derived fact never sets it above hypothesis
+    evidence_kind: Register[Literal["correlation", "test"]]
+    evidence: Set[str]
+    verified_by: Register[str | None]
 
 class SeverityRaised(Fact[Incident]):
     to: Literal["SEV2", "SEV1"]
@@ -232,13 +239,22 @@ Every field type merges on its own:
 
 | Type | Concurrent writes merge as | Typical use |
 |---|---|---|
-| `Register` | latest by clock wins; but a write whose `deps` don't include the current value becomes a conflict (the stale-write guard) | status, commander, current draft |
-| `Choice` | all causally concurrent values kept, flagged until a fact that has seen all of them picks | severity, owner, decisions |
+| `Owned` | the owning role's write wins and closes any open conflict; anyone else's write is a proposal shown to the owner | severity, status, the commander, the public status update |
+| `Register` | latest by clock wins; but a write whose `deps` don't include the current value becomes a conflict (the stale-write guard) | a finding's text, last seen |
+| `Choice` | all causally concurrent values kept, flagged until a fact that has seen all of them picks; every conflict has an owner and a default (the owner's last write) | decisions with no natural owner |
 | `Set` | each add is tagged by its fact id; a remove names the tags it saw, so a concurrent add survives | responders, labels, reviewers |
 | `Map` | per key, each value by its own type | findings, comments, sections of a document |
 | `Log` | append-only, ordered by time | timeline, notes, observations |
 | `Counter` | increments add | pages sent, retries, rounds |
 | `Text` (later, only if needed) | character-level merge | a shared prose document |
+
+Authority comes before merge. In incident and ticket work, the fields that matter most (severity,
+status, who leads, what is said publicly) have an owner, and an outage needs one value for each at
+every moment: a severity with two values open is worse than a wrong one. So those fields are
+`Owned`: the role decides, agents propose. Merge types are for what has no owner (findings,
+responders, the timeline, counts). A finding that merely correlates with a deploy ("errors began at
+the 10:02 deploy") is the classic anchoring error, so findings carry their status and the kind of
+their evidence, and the commander sees correlation-only findings for what they are.
 
 Code facts need the same table, pair by pair:
 
@@ -267,7 +283,7 @@ concurrent, which only the facts read can say.
 
 ```jsonl
 {"type": "incident.severity_raised", "subject": "incident/2026-11-05-payments", "id": "0b6e…", "deps": ["9a1f…"], "data": {"to": "SEV1"}}
-{"type": "incident.finding_added",   "subject": "incident/2026-11-05-payments", "id": "4c2d…", "deps": ["9a1f…"], "data": {"id": "f3", "text": "errors began at the 10:02 deploy", "evidence": ["deploy d881", "error_rate 0.4% -> 6%"]}}
+{"type": "incident.finding_added",   "subject": "incident/2026-11-05-payments", "id": "4c2d…", "deps": ["9a1f…"], "data": {"id": "f3", "text": "errors began at the 10:02 deploy", "status": "hypothesis", "evidence_kind": "correlation", "evidence": ["deploy d881", "error_rate 0.4% -> 6%"]}}
 ```
 
 For a derived fact, `deps` come from the session log, not from the agent: what it read is in its
@@ -417,8 +433,11 @@ check splits in two:
   written by someone who had already seen `resolved` is rejected everywhere, recorded as rejected,
   and the writer is told. A derived fact is also checked against its outcome (the test really
   passes) before it is recorded.
+- **People are never rejected.** A command from a person is accepted even when its `deps` are
+  stale: the fact is annotated `stale_against: [...]` and the role owner is told. A commander on a
+  bridge call must never be told to re-read and resubmit. Rejection is for machines.
 - **At the home, against current state.** For a subject whose home is reachable, this is the
-  ordinary aggregate check: the home rejects a `SeverityRaised` on a resolved incident outright, as
+  ordinary aggregate check for machines' commands: the home rejects a `SeverityRaised` on a resolved incident outright, as
   an event store would. The two cases below are what remains when facts are written without the
   home, offline or on another Orchestra.
 - **Violations, on the merged state.** A `SeverityRaised` concurrent with `resolved` passes
@@ -429,14 +448,23 @@ check splits in two:
 The facts and their rules are still a state machine shared by every writer, enforced outside all
 of them; it is just honest about which rules hold without coordination.
 
+**Actions with side effects.** A page, a rollback or a failover is not a record and is not undone
+by removing facts. It is its own entity, with a lifecycle: proposed → approved (by the owning role)
+→ executed → verified (against a metric, with the lag the model expects). Each has an idempotency
+key per target (`rollback:payments-api:d881`), decided at the home, so two agents or two people
+cannot run the same rollback; destructive actions need a second approver. Claims (4) cover actions
+on targets as well as jobs, because the dangerous duplicate is not two agents on one job but two
+responders on one failover. And every incident has a kill switch for its agents.
+
 **Attribution and undo (6).** Every fact names its source, and a derived fact names the session
 entries it came from, so any change traces to the agent's exact turn and reasoning. Undoing a bad
 run targets exactly the facts caused by its session, by id: remove *its* `Set` tags, not the
 values; drop its `Log` entries and `Map` keys; and for a `Register`, put back the value it displaced
 only if nothing has written since, otherwise raise a conflict. A blind "write the previous value"
 would clobber the fleet's later work; undo by id leaves it intact. It undoes the record, not the
-world: a pushed branch, a posted comment or a page sent are undone, if at all, by the machine that
-did them, prompted by the facts that say so.
+world: a pushed branch, a posted comment or a page sent are actions, undone (if at all) through
+their own lifecycle above. For a postmortem the record answers the real question, "who knew what,
+when, and acted on it": every fact's `deps` say what its writer had seen.
 
 **Context bloat (7).** Mostly this is the codebase an agent reads, which facts do not shrink. What
 they do shrink is handing work over: the next agent, or a reviewer, gets the previous attempt's
@@ -479,6 +507,17 @@ Most of the value may be in uses that need no merge at all:
   overlapping tasks one after another instead of in parallel.
 - **Review.** The reviewer reads the fact chain (named facts, why, checker verdicts) before the
   diff, and checks the unverified claims first.
+- **The incident scribe.** A timeline built from facts that already exist (deploys, alerts, pages,
+  actions, findings, severity changes), each entry linked to its evidence, in the evidence's
+  wall-clock time.
+- **Duplicate investigations.** Intersect running sessions' reads (the same dashboards, log queries,
+  hypotheses) and tell the commander "agents 2 and 5 and a person are all on the connection pool".
+- **Stale drafts.** Flag the status draft when a mitigation fact has landed since its `deps`, before
+  it is published.
+- **Judged mitigations.** Before an action, record a prediction ("the rollback brings errors under
+  1% within 5 minutes"); judge it against the metrics; a mitigation that does not hold does not
+  close the incident. The model's expected recovery with no action is the counterfactual a
+  postmortem needs, since postmortems, like regressions, credit the last action taken.
 - **Growing the catalogue.** Every `other` and every claim rejected for want of a fact type goes on
   a queue of proposed new facts.
 
@@ -591,6 +630,11 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
 - **Session logs and privacy.** They hold everything an agent read. Immutable, replicated logs make
   deletion impossible unless planned for: hence the separate evidence store, one key per session,
   and crypto-shredding.
+- **Orchestra is one more thing that can fail in an outage.** An incident's home must not share
+  failure domains with the systems it records (the same cloud, database or network); when it is
+  unreachable, writes append locally and merge later, and the incident channel stays the record of
+  last resort. And responders under stress will not learn seven field types: the page shows them a
+  timeline, owners and proposals, never heads or violations.
 - **`source` is self-declared.** Within one Orchestra that is fine; facts that cross between
   Orchestras need signatures, or a peer can write as anyone.
 - **Language-neutral.** The model exports a JSON Schema per fact, with each field's CRDT type as an
@@ -616,6 +660,8 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
 8. Later: syncing between Orchestras (CRDT merge, admission against the causal past, violations as
    a view, triggers only on live appends); undo by id; replayable code facts; `Text`.
 
-Before any of it: measure how often several writers touch one non-code record at once. Steps 1 to
+Before any of it: measure how often several writers touch one non-code record at once, on real
+incident channels and tickets (an operator's guess: near zero, apart from severity, status and the
+update draft, which authority settles, not merge). Steps 1 to
 4 are the coordination core; section 7b's uses need only step 3 and can come first; the rest follows
 when a real case asks for it.
