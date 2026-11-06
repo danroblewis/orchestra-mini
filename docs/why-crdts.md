@@ -36,15 +36,21 @@ disconnected replica: it holds a copy, edits it on its own, and syncs back late.
 fifty replicas, each four minutes stale, each with its own edits. That is the CRDT problem exactly,
 and it is why snapshots, locks and "last write wins on the whole object" keep failing for agents.
 
-This is not an analogy. An AI harness already keeps each agent's **session log**: JSON lines, each
+This is close to literal, with one honest gap. An AI harness already keeps each agent's **session log**: JSON lines, each
 an immutable entry with a `uuid` and a `parentUuid` (a message, a tool request, the tool's result).
 That is a replica's local operation log with causal links, and a set of immutable entries joined by
 parent pointers is the simplest CRDT there is: two copies merge by union on `uuid`, in any order,
-however late. Fifty agents' session logs merge into one log with no coordination at all.
+however late. Fifty agents' session logs merge into one log with no coordination at all. The gap:
+a CRDT replica applies operations to its copy, while an agent holds a prose rendering of the item
+and its operations are reconstructed afterwards (section 3); and `parentUuid` gives causality
+*within* a session, not between agents. Causality between agents has to be recorded separately, as
+the facts each agent had read (`deps`, section 4).
 
 What a CRDT guarantees, in agent terms: **every agent's changes, applied in any order, any number of
 times, however late, produce the same item, with every agent's work in it.** No agent waits, no
-agent referees, no write is lost.
+agent referees, no write is lost. What it does not guarantee is that the converged item is the one
+anyone *intended* (intention preservation): convergence is the easy half, and the field types and
+conflict rules in sections 4 and 6 are where intent is protected or lost.
 
 ## 3. Where the facts come from
 
@@ -87,7 +93,10 @@ Two rules make derived facts safe in a CRDT:
 1. **A classification is recorded once and never rerun.** Replicas must apply the same operations,
    and a model is not deterministic, so the label is itself the fact, with the classifier's version
    and confidence. Replicas copy the label; they never reclassify. A better classifier later emits
-   correcting facts that supersede the old ones; it never rewrites them.
+   correcting facts that supersede the old ones; it never rewrites them. A derived fact's id is
+   content-addressed, `hash(type, subject, caused_by, deriver version)`, so two Orchestras deriving
+   from the same session mint the same id, union deduplicates it, and a `Counter` never counts it
+   twice. Every other fact carries a globally unique id (a UUID, not a local sequence like `e41`).
 2. **Facts that replay and facts that describe are different.** A `function_renamed` produced by a
    rename tool (or recognised exactly by a syntax-tree diff) can be applied again on top of someone
    else's change: a rename and a change to the same function's body commute, where text patches
@@ -104,14 +113,18 @@ form.
 
 The AI writing an integration writes a **model**: the item's fields, each with a CRDT type from a
 short menu, and the named facts that change it. The same catalogue is the classifier's list of
-answers. Orchestra derives the merge from the types; nobody writes merge code.
+answers. Orchestra derives the merge from the types; nobody writes merge code. Underneath, every
+type is the same thing: a deterministic fold over the set of facts on a subject, in the order of
+(hybrid logical clock, id). The clock is stamped once, by the first Orchestra to ingest the fact,
+and never restamped; it respects causality (a fact always sorts after the facts in its `deps`),
+which producers' wall clocks do not.
 
 ```python
 from orchestra_model import Entity, Fact, Register, Set, Map, Counter, Log, Choice
 
 class Incident(Entity):                         # kind: incident, subject: incident/2026-11-05-payments
     severity:  Choice[Literal["SEV3", "SEV2", "SEV1"]]   # one value; concurrent different values are kept and flagged
-    status:    Register[Literal["investigating", "mitigated", "resolved"]]   # latest wins
+    status:    Register[Literal["investigating", "mitigated", "resolved"]]   # latest wins, unless the writer hadn't seen the current value
     commander: Register[str | None]
     responders: Set[str]                        # add and remove commute; a concurrent add beats a remove
     timeline:  Log[TimelineEntry]               # append-only, ordered by event time
@@ -137,25 +150,32 @@ Every field type merges on its own:
 
 | Type | Concurrent writes merge as | Typical use |
 |---|---|---|
-| `Register` | latest by event time wins (ties by id) | status, last seen, current draft |
-| `Choice` | all concurrent values kept, flagged as a conflict until one fact picks | severity, owner, decisions |
-| `Set` | adds and removes commute; add wins over a concurrent remove | responders, labels, reviewers |
+| `Register` | latest by clock wins; but a write whose `deps` don't include the current value becomes a conflict (the stale-write guard) | status, commander, current draft |
+| `Choice` | all causally concurrent values kept, flagged until a fact that has seen all of them picks | severity, owner, decisions |
+| `Set` | each add is tagged by its fact id; a remove names the tags it saw, so a concurrent add survives | responders, labels, reviewers |
 | `Map` | per key, each value by its own type | findings, comments, sections of a document |
 | `Log` | append-only, ordered by time | timeline, notes, observations |
 | `Counter` | increments add | pages sent, retries, rounds |
 | `Text` (later, only if needed) | character-level merge | a shared prose document |
 
+The stale-write guard matters most for fields agents write. Plain last-writer-wins lets an agent
+four minutes stale, writing `status: investigating` with a fresh clock, beat `resolved`; with the
+guard, that write didn't see `resolved`, so it becomes a conflict to resolve instead. Fields only
+programs write (telemetry, last seen) can stay plain last-writer-wins.
+
 Facts are the only way to change an item, whoever produces them: a program printing them, a
-decision agent answering, or the detector, checker and classifier reading an agent's session. Each carries the version it
-was based on:
+decision agent answering, or the detector, checker and classifier reading an agent's session. Each
+carries `deps`: the heads of the subject it had read, as fact ids. A scalar version number would not
+do: each Orchestra's "version 41" is a different thing, and "concurrent" has to mean causally
+concurrent, which only the facts read can say.
 
 ```jsonl
-{"type": "incident.severity_raised", "subject": "incident/2026-11-05-payments", "base": 41, "data": {"to": "SEV1"}}
-{"type": "incident.finding_added",   "subject": "incident/2026-11-05-payments", "base": 41, "data": {"id": "f3", "text": "errors began at the 10:02 deploy", "evidence": ["deploy d881", "error_rate 0.4% -> 6%"]}}
+{"type": "incident.severity_raised", "subject": "incident/2026-11-05-payments", "id": "0b6e…", "deps": ["9a1f…"], "data": {"to": "SEV1"}}
+{"type": "incident.finding_added",   "subject": "incident/2026-11-05-payments", "id": "4c2d…", "deps": ["9a1f…"], "data": {"id": "f3", "text": "errors began at the 10:02 deploy", "evidence": ["deploy d881", "error_rate 0.4% -> 6%"]}}
 ```
 
-For a derived fact, `base` comes from the session log, not from the agent: the version it read is
-in its Read result.
+For a derived fact, `deps` come from the session log, not from the agent: what it read is in its
+Read results.
 
 ## 5. When a fact happens: branches
 
@@ -181,10 +201,13 @@ takes the first:
 
 - **One document, many objects.** In Automerge and Yjs one document holds many objects, and one
   change may touch several of them atomically. Orchestra is one log with items as projections by
-  subject; the facts of one turn can share a transaction id, applied together or not at all.
-- **Transactions over separate CRDTs.** AntidoteDB gives transactions across CRDT objects with
-  atomic visibility and causal order, without coordination ("causal consistency with atomic
-  visibility").
+  subject; the facts of one turn can form a transaction, applied together or not at all. A shared
+  id is not enough: the transaction must list its members, and a receiver holds them back until it
+  has every one.
+- **Transactions over separate CRDTs.** AntidoteDB (Cure) gives transactions across CRDT objects
+  with atomic visibility and causal snapshots, without coordination ("causal consistency with
+  atomic visibility"). It makes writes visible together; it does not validate them together, so it
+  does not rescue rules like `requires` (section 6).
 
 Event sourcing adds the nuance that one event should not belong to two aggregates: so one fact per
 item, linked by a shared cause. The session is the evidence; every fact on another item has
@@ -195,8 +218,8 @@ item, linked by a shared cause. The session is the evidence; every fact on anoth
 A CRDT's history is a DAG of changes, like git's, and a version is a set of heads:
 
 - **Forking with history is cheap.** Copy the changes; Automerge's `fork()` does it, and can fork
-  from a past version (the document as it was at given heads). Yjs can, from snapshots, if history
-  is kept rather than garbage-collected.
+  from a past version (the document as it was at given heads). Yjs has no fork as such: with
+  garbage collection off, a snapshot can be restored into a new document.
 - **Merging a fork back is a union of changes** and never stops on a conflict: concurrent writes to
   one value are kept side by side for something to resolve.
 - **Merging two CRDTs that never shared history** works mechanically (the merge is defined on any
@@ -228,9 +251,12 @@ fork that reaches main only by a merge.
 
 **Stale context (1).** A running agent's stdin keeps receiving the facts that touch its item while
 it works ("since you read v41: ResponderJoined carol, FindingAdded f2, TimelineEntry x3"). It
-updates its working copy incrementally: deltas, not a re-read. Its own late writes still merge,
-because CRDT operations don't depend on being fresh. And staleness is detectable without the agent's
-help: its session log says which version it read, and Orchestra knows the current one.
+updates its working copy incrementally: deltas, not a re-read. Each delta says where it sits
+causally: a late fact that sorts *before* what the agent read (a `Log` entry inserted into history)
+is different news from one after it, and the agent is told which. Its own late writes still merge,
+because CRDT operations don't depend on being fresh, and where freshness matters the stale-write
+guard turns them into conflicts rather than overwrites. Staleness is detectable without the agent's
+help: its `deps` say what it read.
 
 **Lost updates (2).** There are no whole-object writes, only operations on typed fields. Two
 agents' operations on different fields, different keys, a set or a log never overwrite each other.
@@ -243,40 +269,61 @@ never collide, and the same section becomes a `Choice` conflict someone resolves
 merge. On code, replayable facts (renames, added parameters) rebase onto each other structurally;
 the rest is git's merge, as now.
 
-**Duplicate work (4).** A claim is an operation too: `Map[job, Claim]` where a claim has a holder
-and a lease. Two agents claiming the same job at once resolve deterministically (earliest event
-wins, ties by id); the loser sees on its stdin that it lost and stops. That's work allocation with
-no scheduler.
+**Duplicate work (4): advisory claims.** A claim is an operation too: `Map[job, Claim]` where a
+claim has a holder and a lease. Two agents claiming the same job at once resolve deterministically
+(earliest clock wins, ties by id); the loser sees on its stdin that it lost and stops. This
+*reduces* duplicate work; it cannot prevent it. A CRDT cannot give mutual exclusion, which needs
+consensus: a claim with an earlier clock that arrives late (a laptop that was offline) takes the job
+after the holder has worked on it, and leases assume clocks roughly agree. Where duplicate work is
+expensive, claims for that kind of job go through one authority per subject (a sequencer), the one
+place this design admits a hub.
 
-**Unvalidated writes (5).** Each fact's `requires` is checked against the state it lands on, and a
-derived fact is also checked against its outcome before it is recorded. `SeverityRaised` on a
-resolved incident, or a `test_fixed` whose test still fails, is rejected, recorded as rejected (with
-who caused it), and the agent is told. The facts and their rules are a state machine shared by every
-writer, enforced outside all of them.
+**Unvalidated writes (5).** "Checked against the state it lands on" sounds right and is wrong:
+which state a fact lands on depends on delivery order, so two Orchestras would accept and reject
+the same fact and diverge for good. An invariant like "never after resolved" is not monotone, and
+by the CALM theorem (and Bailis's I-confluence) it cannot be kept without coordination. So the
+check splits in two:
+
+- **Admission, against the fact's own causal past.** `requires` is evaluated on the state the
+  writer had read (its `deps`). That is deterministic and final on every replica: `SeverityRaised`
+  written by someone who had already seen `resolved` is rejected everywhere, recorded as rejected,
+  and the writer is told. A derived fact is also checked against its outcome (the test really
+  passes) before it is recorded.
+- **Violations, on the merged state.** A `SeverityRaised` concurrent with `resolved` passes
+  admission on both sides, and the merged incident breaks the rule. That is not rejected; it is a
+  derived view, a flagged violation computed from the merged state, which a later fact resolves
+  (reopen, or withdraw). For the few transitions that must be final at once, the subject gets one
+  authority that orders them, as with expensive claims.
+
+The facts and their rules are still a state machine shared by every writer, enforced outside all
+of them; it is just honest about which rules hold without coordination.
 
 **Attribution and undo (6).** Every fact names its source, and a derived fact names the session
 entries it came from, so any change traces to the agent's exact turn and reasoning. Undoing a bad
-run is emitting the inverse of exactly the facts caused by its session (`Set` remove for its adds,
-the previous `Register` value), which the CRDT merges like anything else, and which leaves the rest
-of the fleet's concurrent work intact.
+run targets exactly the facts caused by its session, by id: remove *its* `Set` tags, not the
+values; drop its `Log` entries and `Map` keys; and for a `Register`, put back the value it displaced
+only if nothing has written since, otherwise raise a conflict. A blind "write the previous value"
+would clobber the fleet's later work; undo by id leaves it intact.
 
 **Context bloat (7).** An agent needs the current state once and deltas after; the facts are small
 because they say only what changed, and they say it by name.
 
 ## 7. Why not the alternatives
 
-| | Shared snapshots (prompts 1 and 2) | Locks or a scheduler | Central log, last write wins per field | CRDT with named facts |
+| | Shared snapshots (prompts 1 and 2) | Locks or a scheduler | Last write wins per field (with a hybrid clock) | Typed CRDT with named facts |
 |---|---|---|---|---|
 | 50 interleaved writers | overwrite each other | wait for each other | mostly fine; single values silently lost | merge; conflicts on single values kept and shown |
-| Agents 4 minutes stale | their writes are wrong | they held a lock for 4 minutes | late writes land, and may undo newer ones | late writes merge by type; deltas keep them current |
+| Agents 4 minutes stale | their writes are wrong | they held a lock for 4 minutes | a stale write with a fresh clock beats newer work | the stale-write guard makes it a conflict; deltas keep agents current |
 | Concurrent edits to collections | lost | serialized | the whole collection replaced | sets, maps and logs merge |
-| Impossible transitions | become truth | caught only if the lock holder checks | become truth | rejected by the fact's rule |
-| Undo one agent's work | restore an old snapshot, losing others' work | same | hard | inverse facts, merged |
-| Several Orchestras (work and home laptops, a teammate's) | can't sync | needs a shared server | needs a shared server | sync logs both ways; they converge |
+| Impossible transitions | become truth | caught only if the lock holder checks | become truth | rejected at admission if the writer saw the state; otherwise flagged |
+| Undo one agent's work | restore an old snapshot, losing others' work | same | hard | its facts removed by id |
+| Several Orchestras (work and home laptops, a teammate's) | can't sync | needs a shared server | syncs: it is a CRDT too | syncs; the same merge everywhere |
 
-The last row is the reason that needs a CRDT rather than a central sequencer: as soon as more than
-one Orchestra holds the same items, there is no hub to order everything, and only CRDT semantics
-make them agree. Session logs and recorded classifications sync the same way: by union.
+Per-field last-writer-wins with a hybrid clock is itself a CRDT (an LWW map) and syncs between
+Orchestras without a server, so syncing is not what sets the typed version apart. What does is the
+rest of the table: stale writes made into conflicts instead of wins, collections that merge,
+admission against what the writer saw, and undo by id. Session logs and recorded classifications
+sync the same way, by union.
 
 ## 8. The objection: "if the AI writes the facts, it's writing the system dynamics model, so why estimate?"
 
@@ -313,7 +360,7 @@ facts are the flows, merged facts on main for the system, branch facts for the a
   classifier's list of answers.
 - **Orchestra must implement the types once**: a few hundred lines for Register, Choice, Set, Map,
   Log and Counter (Text is a library, pycrdt, if ever needed), plus validation of `requires` and the
-  base-version bookkeeping.
+  `deps` and clock bookkeeping.
 - **Facts must be named well, and now that is measurable.** A bad model (a fact called `updated`
   that sets everything) brings back the snapshot problems. A missing name shows up directly: as a
   rate of `other`, and as checked claims rejected for want of a fact (in the lab, a correct
@@ -324,6 +371,14 @@ facts are the flows, merged facts on main for the system, branch facts for the a
   raw events kept so facts can be derived again and corrected.
 - **Session logs are large and hold everything an agent read.** Keep their structure, truncate big
   tool results to a hash and a pointer, and decide per project what may be ingested at all.
+- **Bookkeeping the types need.** Removes leave tombstones (a `Set` must remember removed tags);
+  they can be dropped only once every replica has seen them (causal stability), which with laptops
+  that go offline may be never, so the log grows. Snapshots of the fold keep reads fast.
+- **The model will change.** A field may move from `Register` to `Choice`, or split in two; old
+  facts must still fold. That needs a versioned fold or lenses between model versions (Ink &
+  Switch's Cambria), decided before the first change, not after.
+- **`source` is self-declared.** Within one Orchestra that is fine; facts that cross between
+  Orchestras need signatures, or a peer can write as anyone.
 - **Language-neutral.** The model exports a JSON Schema per fact, with each field's CRDT type as an
   annotation, so Orchestra (and processors in other languages) work from the schema, not from
   Python.
@@ -334,7 +389,9 @@ facts are the flows, merged facts on main for the system, branch facts for the a
 ## 10. What would be built, in order
 
 1. The type menu and generic merge in Orchestra, driven by a model's JSON Schema.
-2. Facts with `base` versions; rejection by `requires`, recorded as events.
+2. Facts with globally unique (or content-addressed) ids, `deps` and a hybrid clock; admission by
+   `requires` against the writer's causal past, recorded as events; violations on the merged state
+   as a derived view.
 3. Session logs ingested as wrapped entries; harness diffs per tool call; a syntax-tree detector
    for change facts, a checker for work facts, and a classifier for the why and the gaps, each fact
    with `caused_by`.
