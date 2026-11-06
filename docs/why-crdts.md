@@ -62,11 +62,13 @@ at formal output, and the lab measured it. Forced (only semantic tools and one r
 available), agents used them every time. Given optional `record_*` fact tools (one per fact name,
 generated from the catalogue) beside Edit and Bash (strategy F): unprompted, 0 calls in 8 tasks;
 told once to record, calls in 7 of 8, covering 10 of the 26 changes the detector found; told to
-record after every change, calls in 5 of 8, covering 8 of 26. Across all runs it never once
-recorded the intent (`test_fixed`), even on the two fix-a-test tasks: it records the code change and
-stops. Its records carry no link to the edits, so they join the detector's facts only by function
+record after every change, calls in 5 of 8, covering 8 of 26 (with eight runs a condition these two
+are indistinguishable: 0.22–0.57 and 0.17–0.50). In about eight prompted chances it never recorded
+the intent (`test_fixed`), which still allows a true rate up to about 30%: it records the code change
+and stops. Its records carry no link to the edits, so they join the detector's facts only by function
 name. What they do add is a reason per change, which no detector produces. An agent records some of
-its work when asked, never all of it, and never the part that matters most.
+its work when asked, rarely all of it, and seldom the part that matters most; this is one model and
+two prompt wordings.
 Agents should work the way they already work. The facts are derived, at two
 levels:
 
@@ -90,33 +92,39 @@ levels:
   fact. It becomes a domain fact only when it is checked (and, for a branch, at merge), submitted as
   a command the subject's home accepts or rejects. The named fact points back to its evidence:
 
-  Measured (`~/agent-facts-lab`: eight small tasks on a toy Python module, one run each, one model,
-  and the same author wrote the expected facts and the detector, so read these as a feasibility
-  check, not a benchmark; Claude Code on Sonnet, $1.18 in all): the
-  detector over harness diffs recorded every catalogued change fact (precision and recall 1.00 on
-  seven tasks, 0.88/0.75 on the mixed one), including edits the agent made with `sed`. Haiku
-  classifying session windows alone was much worse (recall 0 to 0.75 by function; 13 of 14 change
-  facts by file, 1 of 8 work facts): an Edit window has no line context, so the function is lost, and
-  one window cannot show "failed before". Once it named a fact the catalogue lacked
-  (`parameter_renamed`, from the agent's own words).
+  Measured (`~/agent-facts-lab`: eight small tasks on a ~100-line Python module, one run each, one
+  model, one harness in single-prompt mode; $3.20 in all). Read every number as a feasibility check
+  on a development set, not a benchmark. The intervals below are 95% Wilson intervals that ignore
+  clustering, so the real ones are wider, and runs of the same task are near-duplicates, so the
+  effective sample is closer to eight tasks than to the window counts.
 
-  A real classification model does much better on the change layer (strategy G: TypeSafe's Jev, a
-  hosted classifier that answers multiple-choice questions with probabilities and writes no text,
-  over 154 windows labelled by the detector): 0.94 accuracy on the windows that change code, 98%
-  right among the 86% of answers given at 0.95 confidence or more, the same answer on every rerun,
-  67 ms and $0.00004 a call (Haiku: 2.5 s and seven times the price). It names the type only; which
-  function, and the changeset, still come from the detector. On intent it fails like everything
-  else: "does this window fix a failing test?" is about 0.6, because one window cannot show the
-  failure before. A small local classifier (sentence embeddings and logistic regression) did not
-  work on so few examples (0.43); it would need on the order of a hundred labelled windows per fact
-  type, which the detector can label for free as work accumulates.
+  - **The detector** found 13 of 13 required catalogued change facts on tasks 1–7 (95% CI
+    0.77–1.00), including edits made with `sed`; but it was debugged on those same tasks, by the
+    author of the expected facts, and on task 8, the one written afterwards, it lacked
+    `parameter_renamed`.
+  - **Haiku over a session window alone** was poor at naming *which function* changed (an Edit
+    window has no line context); scored by type only, on the same ten windows, it got 9 of 10.
+  - **Jev (TypeSafe's hosted classifier**, which answers multiple-choice questions with
+    probabilities and writes no text) was scored against the detector's labels, not human ones. It
+    agreed on 48 of 51 change windows (0.84–0.98), but 27 of those were semantic-tool calls whose
+    name states the label, and a lookup on the tool name alone gets 34 of 51. On the windows it is
+    wanted for, Edit and Bash, it agreed on 21 of 24 (0.69–0.96), Bash alone 10 of 13; at 0.95
+    confidence it answered only about half of those. One confident error labelled a *failed* `sed`
+    as `test.added`: it labels what the agent tried, not what happened. Its real advantages over
+    Haiku are 67 ms, $0.00004 a call and real probabilities, not measured accuracy.
+  - **Intent from one window** ("does this fix a failing test?") came out near chance (5 of 8
+    positives, from two tasks, with probabilities 0.44–0.77); a longer window was never tried.
+  - **A small local classifier** (sentence embeddings and logistic regression) scored 0.43, but held
+    out by task, 16 of 51 change windows had a class with no training example, so this says nothing
+    about how much data one would need. No local classifier is known to work yet.
 
-  So: the detector for change facts where a syntax tree exists; a real classifier for the change
-  type where none does (other languages, shell output, non-code work) and as a cross-check, with
-  0.95 as its threshold; the checker for intent; agents' own records as optional notes of why.
-  Windows reach a hosted classifier only where the project allows it (`classifier: hosted` or
-  `local`, set once; at work the default is local), and every send is recorded (`egress.sent`, with
-  the vendor, the window's keyed hash and its size).
+  So, provisionally: the detector for change facts where a syntax tree exists; a classifier for the
+  change type where none does (shell output, other languages, non-code work), adopted only once it
+  beats a tool-name baseline on human labels; the checker for intent; agents' own records as
+  optional notes of why. Windows reach a hosted classifier only where the project allows it
+  (`classifier: hosted` or `none`, set once; at work the default is `none`, until a local one is
+  shown to work), and every send is recorded (`egress.sent`, with the vendor, the window's keyed hash
+  and its size).
 
 ```jsonl
 {"type": "classification.recorded", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["evidence:sha256:41e0…", "evidence:sha256:42b9…"], "data": {"label": "code.function_body_changed", "lines_changed": 2}}
@@ -174,17 +182,29 @@ Built as ordinary machines and events, with none of orchestra-mini's six contrac
    `code.function_body_changed`, `test.added` and the rest, with subject `path::symbol` and the run
    in `data`. Per turn rather than per tool call: the lab's net pass over the whole run is what
    joined renames to their call sites anyway.
-2. **A checker machine**, `on:` the agent's turn completing. It runs the tests at the baseline and
-   at the result, in a sandbox with no network and no credentials, and prints `work.test_fixed`
-   only when the test failed before and passes after.
-3. **Deterministic ids for derived facts**, `hash(type, subject, base..head)`. Orchestra already
+2. **A checker machine**, `on:` the agent's turn completing, needing no claim from the agent. It
+   runs the tests at the baseline and at the result, in a sandbox with no network and no
+   credentials, and prints `work.test_fixed` only when the test **existed at the baseline and failed
+   there**, passes after, the test function itself is unchanged, and a rerun rules out a flake. (The
+   lab's checker only checked the agent's claims, and counted a newly added test as "failed
+   before", so a new passing test, or a weakened one, would have counted as a fix.)
+3. **Deterministic ids for derived facts**, `hash(type, subject, key, base..head)`, where `key` is
+   the fact's distinguishing data (the parameter's name, say), so two `parameter_added` facts on one
+   function in one turn do not collide. Orchestra already
    drops an id it has seen, so "classify once, never twice" comes free.
 4. **A stale flag on the run record.** A run already gets its item when it starts; Orchestra records
    the item's last event id then, and marks the run `stale` if the item moved before the run
    finished. One field, and it covers stale context and stale drafts without `deps`.
 5. **`source` stamped by Orchestra** from the machine whose stdout carried the line, never claimed.
-6. **The measurement the rest depends on**, one query on the existing log: how many subjects get
-   events from two or more sources within ten minutes of each other, and on which fields.
+6. **The measurement the rest depends on: stale writes, not closeness in time.** Two sources within
+   ten minutes measures nearness, not conflict. With step 4's record, measure for each run whether a
+   different writer changed the same field between the run's read and its write; report per run
+   and per item-day, by kind of item, against a null with timestamps shuffled; and judge a sample
+   by hand for harm (a lost update, a stale draft published, duplicate work). Do it on the real log
+   and on a deliberately stressed incident simulation (five agents and a scripted person), since a
+   fleet coordinated by assignment shows close to zero by construction. About 300 runs with no
+   harmful stale write bound the rate below 1%: then Appendix A stays on the shelf; above 5% for one
+   kind of item, that kind gets a home.
 
 Git is the evidence: facts cite tree and commit hashes, and session logs stay where the harness
 writes them. The counts of these facts reach the count of the bus, so discovery sees the flows with
@@ -195,12 +215,14 @@ no new code.
 | Not yet | Until |
 |---|---|
 | reduced profiles for tainted triggers (section 2, rule 3) | an agent with push rights is triggered from outside input; the README's own example already is, so this is first in line |
-| a real classifier (Jev) | a language with no detector, or non-code work, to label |
+| a classifier (Jev or local) | on about 300 human-labelled Edit, Bash, other-language and non-code windows, it beats a tool-name baseline by 10 points with 60% coverage at 0.95 |
 | relevance-gated notices to running agents | the query in step 6 shows real overlap |
 | a home per subject, the field types, `deps` (Appendix A) | the query shows several writers on one record's fields |
 | an evidence store with per-session keys | session logs must be shared, kept apart or deleted on request |
 | syncing between Orchestras, signing, allowlists | a second Orchestra holds the same items |
-| replayable code facts, fact-assisted rebase | a structured merge tool (Mergiraf) leaves agent conflicts that replay would fix |
+| replayable code facts, fact-assisted rebase | on about 100 conflicting agent-branch pairs, at least 10% of what a structured merge tool (Mergiraf) leaves is fixed by replay |
+| growing the catalogue as a priority | on 3–5 real repositories, with facts labelled by two people blind to the detector, its recall is under 0.9 or catch-all facts exceed 20% |
+| trusting `test_fixed` beyond notes | on about 50 runs with tasks that tempt cheating (edit the test, add one, delete one, a flaky test), false fixes are rare |
 
 ## 4. What the facts are for
 
