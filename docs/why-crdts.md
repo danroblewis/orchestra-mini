@@ -1,10 +1,21 @@
 # Why CRDTs, for a fleet of agents
 
-The goal is better coordination among many agents (AI agents, decision agents and programs)
-working on the same things at once. This document argues that the thing they work on should be a
-**CRDT whose operations are named facts**, says where those facts come from (mostly not from the
-agents themselves), says exactly what that buys over the alternatives, answers the objection that it
-duplicates the system dynamics model, and says what it costs.
+This document began as the case for making the things agents work on CRDTs whose operations are
+named facts. After eight critical reviews (a CRDT researcher, an event-sourcing practitioner, an
+agent-harness engineer, a system-identification researcher, a patch-theory expert, an incident
+commander, a security engineer, a simplicity advocate) and three experiments, its thesis is
+narrower:
+
+**Facts about agents' work should come from the harness, not from the agents (a diff per turn, a
+syntax-tree detector, a test checker, and a classifier where no detector exists), and they are
+useful now, for handing work over, review, scope fences and counting flows. The CRDT and
+event-store machinery is for many writers on one shared record that is not code, which nobody has
+measured yet; it is kept, in full, in Appendix A, as the design to use if the measurement says
+so.**
+
+The body is what to believe and build now (sections 1 to 5). The appendices are the design if
+concurrent writers turn out to be common (A), facts and the system dynamics model (B), the costs
+and safety of the full design (C), and its build order (D).
 
 ## 1. The coordination problems, as they happen today
 
@@ -41,55 +52,9 @@ once (an incident's findings, timeline and status during an outage; a ticket's f
 triage agent, a fixer and a person all touch it; a document several agents draft together; the
 claims on jobs), and the facts about the work itself, which the git workflow does not record at
 all. How often several writers really touch one record at once is not yet measured; it is the
-first thing to measure before building more than section 10's first steps.
+first thing to measure before building more than the smallest version in section 3.
 
-## 2. The key observation: long-running agents are disconnected replicas
-
-CRDTs exist for replicas that edit the same data while disconnected, then sync, and must agree
-without a coordinator. An agent that reads an item and then thinks for four minutes *is* a
-disconnected replica: it holds a copy, edits it on its own, and syncs back late. Fifty of them are
-fifty replicas, each four minutes stale, each with its own edits. That is the CRDT problem exactly,
-and it is why snapshots, locks and "last write wins on the whole object" keep failing for agents.
-
-This is close to literal, with one honest gap. An AI harness already keeps each agent's **session log**: JSON lines, each
-an immutable entry with a `uuid` and a `parentUuid` (a message, a tool request, the tool's result).
-That is a replica's local operation log with causal links, and a set of immutable entries joined by
-parent pointers is the simplest CRDT there is: two copies merge by union on `uuid`, in any order,
-however late. Fifty agents' session logs merge into one log with no coordination at all. The gap:
-a CRDT replica applies operations to its copy, while an agent holds a prose rendering of the item
-and its operations are reconstructed afterwards (section 3); and `parentUuid` gives causality
-*within* a session, not between agents. Causality between agents has to be recorded separately, as
-the facts each agent had read (`deps`, section 4).
-
-What a CRDT guarantees, in agent terms: **every agent's changes, applied in any order, any number of
-times, however late, produce the same item, with every agent's work in it.** No agent waits, no
-agent referees, no write is lost. What it does not guarantee is that the converged item is the one
-anyone *intended* (intention preservation): convergence is the easy half, and the field types and
-conflict rules in sections 4 and 6 are where intent is protected or lost.
-
-### The objection from event sourcing: connected and slow is not disconnected
-
-An event-sourcing practitioner answers that a four-minute agent is not disconnected; it is
-connected and slow, which is what optimistic concurrency was built for. Each subject's stream lives
-in one place; an append carries the version the writer read; a stale append fails, and the
-command is decided again against the new state, by a program, not by rerunning the agent. Most
-commands still hold on the new state; only those the new state rejects go back to the agent.
-
-That is right, and it changes the design: **every subject has a home Orchestra**, which appends its
-facts and checks `deps` against the subject's current heads. When they differ, the home re-decides
-the fact against the new state using the field types as its **conflict table**: two adds to a `Set`
-never conflict, two writes to a `Register` do, a `Log` append never does. The typed fields are a
-compact way to write the "which event types conflict with which" table that event stores already
-use; nothing is merged blindly. What must hold at the instant of acceptance (claims, terminal
-transitions like `resolved`) is checked there, with real exclusion.
-
-The CRDT part is what is left when there is no home to ask: a laptop offline, two Orchestras
-replicating each other's subjects, an agent's branch. There the same field types give the merge,
-and the rules in section 6 say what can and cannot be guaranteed without coordination. So the
-design is an event store per subject for decisions, and CRDT merge for replication and for working
-offline, with one set of types serving both.
-
-## 3. Where the facts come from
+## 2. Facts from agent work: where they come from, measured
 
 Asking agents to emit facts themselves (a `rename_function` tool instead of Edit, a
 `report_work` call at the end of each turn) puts the burden on the one participant least reliable
@@ -110,7 +75,7 @@ levels:
   domain events, and mixing them into the domain log is how an event-sourced monolith starts. They
   go into an **evidence store**: content-addressed, encrypted with one key per session (deleting the
   key erases the session's evidence wherever it was copied, which is crypto-shredding, with the
-  limits in section 9), with its own retention. Secrets are redacted from tool results (with
+  limits in Appendix C), with its own retention. Secrets are redacted from tool results (with
   gitleaks-style rules) before anything is stored or classified. They merge by union and never conflict, because nothing in them is shared. The event
   log refers to them by hash.
 - **Named facts: derived from the log by programs first, a classifier second.** The harness
@@ -200,7 +165,137 @@ the subject's home is the command handler that turns it into a fact or rejects i
 classification is command handling too. A rejected command changed nothing, so it goes to a command
 audit log, not into the item's fold. Derivation is for the work that happens in free form.
 
-## 4. What it looks like
+## 3. The smallest version, in orchestra-mini
+
+Built as ordinary machines and events, with none of orchestra-mini's six contracts changed:
+
+1. **A diff at the end of each `orchestra agent` turn.** The turn's net working-tree diff goes to a
+   syntax-tree detector, which prints `code.function_renamed`, `code.parameter_added`,
+   `code.function_body_changed`, `test.added` and the rest, with subject `path::symbol` and the run
+   in `data`. Per turn rather than per tool call: the lab's net pass over the whole run is what
+   joined renames to their call sites anyway.
+2. **A checker machine**, `on:` the agent's turn completing. It runs the tests at the baseline and
+   at the result, in a sandbox with no network and no credentials, and prints `work.test_fixed`
+   only when the test failed before and passes after.
+3. **Deterministic ids for derived facts**, `hash(type, subject, base..head)`. Orchestra already
+   drops an id it has seen, so "classify once, never twice" comes free.
+4. **A stale flag on the run record.** A run already gets its item when it starts; Orchestra records
+   the item's last event id then, and marks the run `stale` if the item moved before the run
+   finished. One field, and it covers stale context and stale drafts without `deps`.
+5. **`source` stamped by Orchestra** from the machine whose stdout carried the line, never claimed.
+6. **The measurement the rest depends on**, one query on the existing log: how many subjects get
+   events from two or more sources within ten minutes of each other, and on which fields.
+
+Git is the evidence: facts cite tree and commit hashes, and session logs stay where the harness
+writes them. The counts of these facts reach the count of the bus, so discovery sees the flows with
+no new code.
+
+**Not built until a measurement asks for it:**
+
+| Not yet | Until |
+|---|---|
+| reduced profiles for tainted triggers (section 2, rule 3) | an agent with push rights is triggered from outside input; the README's own example already is, so this is first in line |
+| a real classifier (Jev) | a language with no detector, or non-code work, to label |
+| relevance-gated notices to running agents | the query in step 6 shows real overlap |
+| a home per subject, the field types, `deps` (Appendix A) | the query shows several writers on one record's fields |
+| an evidence store with per-session keys | session logs must be shared, kept apart or deleted on request |
+| syncing between Orchestras, signing, allowlists | a second Orchestra holds the same items |
+| replayable code facts, fact-assisted rebase | a structured merge tool (Mergiraf) leaves agent conflicts that replay would fix |
+
+## 4. What the facts are for
+
+Most of the value may be in uses that need no merge at all:
+
+- **Scope fences.** A task names the subjects it may touch; a change fact outside them pauses the
+  agent. Deterministic and cheap.
+- **Tripwires on the session log.** Cheap classifiers that spot looping, repeated failing edits, or
+  "done" claimed with no test run, and stop or redirect the agent. Acted on, not recorded as facts.
+- **Fact-assisted rebase.** On a git conflict, invert the agent's replayable facts, merge the text,
+  and replay them on the new main, handing back only the remaining hunks. This is RefMerge (Ellis,
+  Nadi and Dig, 2022; also MolhadoRef, IntelliMerge), whose evaluation found it removes some
+  conflicts and introduces others. Failed preconditions (the name is taken, a concurrent new call
+  uses the old name, two renames of one symbol) are conflicts, never silent results, and CI runs on
+  the replayed result: equal trees in either order is convergence, not correct code. Measure first
+  what share of agent-branch conflicts a structured merge tool leaves that replay would fix; if it is
+  small, code facts are for prevention (scope fences, scheduling), not merging.
+- **Scheduling.** Predict which symbols a task will touch from similar past tasks' facts, and run
+  overlapping tasks one after another instead of in parallel.
+- **Review.** The reviewer reads the fact chain (named facts, why, checker verdicts) before the
+  diff, and checks the unverified claims first.
+- **The incident scribe.** A timeline built from facts that already exist (deploys, alerts, pages,
+  actions, findings, severity changes), each entry linked to its evidence, in the evidence's
+  wall-clock time.
+- **Duplicate investigations.** Intersect running sessions' reads (the same dashboards, log queries,
+  hypotheses) and tell the commander "agents 2 and 5 and a person are all on the connection pool".
+- **Stale drafts.** Flag the status draft when a mitigation fact has landed since its `deps`, before
+  it is published.
+- **Judged mitigations.** Before an action, record a prediction ("the rollback brings errors under
+  1% within 5 minutes"); judge it against the metrics; a mitigation that does not hold does not
+  close the incident. The model's expected recovery with no action is the counterfactual a
+  postmortem needs, since postmortems, like regressions, credit the last action taken.
+- **Growing the catalogue.** Every `other` and every claim rejected for want of a fact type goes on
+  a queue of proposed new facts.
+
+## 5. When CRDTs earn their place
+
+If the measurement shows several writers on one shared record, Appendix A is the design, and its
+shape is settled by the reviews: **authority first** (fields with an owning role, such as an
+incident's severity and status, are decided by that role, and agents propose); **a home per
+subject** for everything else that is decided while connected (appends checked against what the
+writer read, re-decided by a program using the field types as the conflict table, rejecting
+machines but never people); and **CRDT merge only where there is no home to ask** (offline, or two
+Orchestras replicating each other). A CRDT gives convergence, not correctness, and cannot give
+mutual exclusion; the appendix says which rules hold without coordination and which need the home.
+
+## A. If concurrent writers are common: the merge design
+
+### A.1 The key observation: long-running agents are disconnected replicas
+
+CRDTs exist for replicas that edit the same data while disconnected, then sync, and must agree
+without a coordinator. An agent that reads an item and then thinks for four minutes *is* a
+disconnected replica: it holds a copy, edits it on its own, and syncs back late. Fifty of them are
+fifty replicas, each four minutes stale, each with its own edits. That is the CRDT problem exactly,
+and it is why snapshots, locks and "last write wins on the whole object" keep failing for agents.
+
+This is close to literal, with one honest gap. An AI harness already keeps each agent's **session log**: JSON lines, each
+an immutable entry with a `uuid` and a `parentUuid` (a message, a tool request, the tool's result).
+That is a replica's local operation log with causal links, and a set of immutable entries joined by
+parent pointers is the simplest CRDT there is: two copies merge by union on `uuid`, in any order,
+however late. Fifty agents' session logs merge into one log with no coordination at all. The gap:
+a CRDT replica applies operations to its copy, while an agent holds a prose rendering of the item
+and its operations are reconstructed afterwards (section 2); and `parentUuid` gives causality
+*within* a session, not between agents. Causality between agents has to be recorded separately, as
+the facts each agent had read (`deps`, A.2).
+
+What a CRDT guarantees, in agent terms: **every agent's changes, applied in any order, any number of
+times, however late, produce the same item, with every agent's work in it.** No agent waits, no
+agent referees, no write is lost. What it does not guarantee is that the converged item is the one
+anyone *intended* (intention preservation): convergence is the easy half, and the field types and
+conflict rules in A.2 and A.4 are where intent is protected or lost.
+
+#### The objection from event sourcing: connected and slow is not disconnected
+
+An event-sourcing practitioner answers that a four-minute agent is not disconnected; it is
+connected and slow, which is what optimistic concurrency was built for. Each subject's stream lives
+in one place; an append carries the version the writer read; a stale append fails, and the
+command is decided again against the new state, by a program, not by rerunning the agent. Most
+commands still hold on the new state; only those the new state rejects go back to the agent.
+
+That is right, and it changes the design: **every subject has a home Orchestra**, which appends its
+facts and checks `deps` against the subject's current heads. When they differ, the home re-decides
+the fact against the new state using the field types as its **conflict table**: two adds to a `Set`
+never conflict, two writes to a `Register` do, a `Log` append never does. The typed fields are a
+compact way to write the "which event types conflict with which" table that event stores already
+use; nothing is merged blindly. What must hold at the instant of acceptance (claims, terminal
+transitions like `resolved`) is checked there, with real exclusion.
+
+The CRDT part is what is left when there is no home to ask: a laptop offline, two Orchestras
+replicating each other's subjects, an agent's branch. There the same field types give the merge,
+and the rules in A.4 say what can and cannot be guaranteed without coordination. So the
+design is an event store per subject for decisions, and CRDT merge for replication and for working
+offline, with one set of types serving both.
+
+### A.2 What it looks like
 
 The AI writing an integration writes a **model**: the item's fields, each with a CRDT type from a
 short menu, and the named facts that change it. The same catalogue is the classifier's list of
@@ -301,7 +396,7 @@ concurrent, which only the facts read can say.
 For a derived fact, `deps` come from the session log, not from the agent: what it read is in its
 Read results.
 
-## 5. When a fact happens: branches
+### A.3 When a fact happens: branches
 
 A fact belongs to the stream it happened on. An agent working on a branch produces facts about that
 branch ("removed `legacy.py` on `fix-17`"); they are true, and they are kept, but they never change
@@ -322,7 +417,7 @@ calibration (how often an agent's work lands), for spotting wasted work, and for
 agent what was tried. So there are two moments to classify: cheaply, per window on the branch, as a
 running account others can watch; and once, at merge, for the facts that count.
 
-### One agent, several items
+#### One agent, several items
 
 An agent's run produces one item for certain, its session, and facts on any number of others. That
 is normal: any replica writes many keys. What CRDTs don't give by default is **atomicity across
@@ -338,13 +433,13 @@ takes the first:
 - **Transactions over separate CRDTs.** AntidoteDB (Cure) gives transactions across CRDT objects
   with atomic visibility and causal snapshots, without coordination ("causal consistency with
   atomic visibility"). It makes writes visible together; it does not validate them together, so it
-  does not rescue rules like `requires` (section 6).
+  does not rescue rules like `requires` (A.4).
 
 Event sourcing adds the nuance that one event should not belong to two aggregates: so one fact per
 item, linked by a shared cause. The session is the evidence; every fact on another item has
 `caused_by` pointing into it. The session is the source of those changes, not their container.
 
-### Forks and merges
+#### Forks and merges
 
 A CRDT's history is a DAG of changes, like git's, and a version is a set of heads:
 
@@ -353,7 +448,7 @@ A CRDT's history is a DAG of changes, like git's, and a version is a set of head
   garbage collection off, a snapshot can be restored into a new document.
 - **Merging a fork back is a union of facts** and never stops on a conflict: concurrent writes to
   one value are kept side by side for something to resolve. The union is of facts, not of what is
-  accepted: the home still re-decides and admission still rejects (sections 2 and 6).
+  accepted: the home still re-decides and admission still rejects (A.1 and A.4).
 - **Merging two CRDTs that never shared history** works mechanically (the merge is defined on any
   two states), with one catch: **independent creation**. If two documents each created "the items
   list", the merge sees two competing objects under one key, and one wins. The cure is naming
@@ -374,7 +469,7 @@ absent), as do Darcs 2's exponential merges when conflicts of conflicts accumula
 
 The closest prior work is Ink & Switch's: Upwelling (drafts for writers over a CRDT, merged when
 ready) and Patchwork (branches, diffs, history and merges for any Automerge document). Their main
-finding is the same as section 3's: merging the data is solved; showing what changed, and deciding
+finding is the same as section 2's: merging the data is solved; showing what changed, and deciding
 when a branch's changes count, is the hard part. That is merge-time classification.
 
 | CRDT idea | Orchestra |
@@ -391,7 +486,7 @@ So an agent run is a fork of the items it touches plus one new item, its session
 machine that produces the session item outright, and proposes changes to other items through a
 fork that reaches main only by a merge.
 
-## 6. Each coordination problem, solved
+### A.4 Each coordination problem, solved
 
 **Stale context (1).** An agent's loop does not read anything mid-turn, and models anchor on what
 they read first, so pushing every new fact at a running agent is noise at best. Two things work
@@ -482,7 +577,7 @@ when, and acted on it": every fact's `deps` say what its writer had seen.
 they do shrink is handing work over: the next agent, or a reviewer, gets the previous attempt's
 named facts, their why and the checker's verdicts, not the transcript.
 
-## 7. Why not the alternatives
+### A.5 Why not the alternatives
 
 | | Shared snapshots (prompts 1 and 2) | Locks or a scheduler | Last write wins per field (with a hybrid clock) | Typed CRDT with named facts |
 |---|---|---|---|---|
@@ -501,41 +596,7 @@ has an allowlist of subject prefixes and data classes; evidence does not sync un
 so; and a project classed as work does not sync to a personal machine, which to an employer would be
 exfiltration.
 
-## 7b. What the facts are for, beyond merging
-
-Most of the value may be in uses that need no merge at all:
-
-- **Scope fences.** A task names the subjects it may touch; a change fact outside them pauses the
-  agent. Deterministic and cheap.
-- **Tripwires on the session log.** Cheap classifiers that spot looping, repeated failing edits, or
-  "done" claimed with no test run, and stop or redirect the agent. Acted on, not recorded as facts.
-- **Fact-assisted rebase.** On a git conflict, invert the agent's replayable facts, merge the text,
-  and replay them on the new main, handing back only the remaining hunks. This is RefMerge (Ellis,
-  Nadi and Dig, 2022; also MolhadoRef, IntelliMerge), whose evaluation found it removes some
-  conflicts and introduces others. Failed preconditions (the name is taken, a concurrent new call
-  uses the old name, two renames of one symbol) are conflicts, never silent results, and CI runs on
-  the replayed result: equal trees in either order is convergence, not correct code. Measure first
-  what share of agent-branch conflicts a structured merge tool leaves that replay would fix; if it is
-  small, code facts are for prevention (scope fences, scheduling), not merging.
-- **Scheduling.** Predict which symbols a task will touch from similar past tasks' facts, and run
-  overlapping tasks one after another instead of in parallel.
-- **Review.** The reviewer reads the fact chain (named facts, why, checker verdicts) before the
-  diff, and checks the unverified claims first.
-- **The incident scribe.** A timeline built from facts that already exist (deploys, alerts, pages,
-  actions, findings, severity changes), each entry linked to its evidence, in the evidence's
-  wall-clock time.
-- **Duplicate investigations.** Intersect running sessions' reads (the same dashboards, log queries,
-  hypotheses) and tell the commander "agents 2 and 5 and a person are all on the connection pool".
-- **Stale drafts.** Flag the status draft when a mitigation fact has landed since its `deps`, before
-  it is published.
-- **Judged mitigations.** Before an action, record a prediction ("the rollback brings errors under
-  1% within 5 minutes"); judge it against the metrics; a mitigation that does not hold does not
-  close the incident. The model's expected recovery with no action is the counterfactual a
-  postmortem needs, since postmortems, like regressions, credit the last action taken.
-- **Growing the catalogue.** Every `other` and every claim rejected for want of a fact type goes on
-  a queue of proposed new facts.
-
-## 8. The objection: "if the AI writes the facts, it's writing the system dynamics model, so why estimate?"
+## B. Facts and the system dynamics model: "if the AI writes the facts, why estimate?"
 
 It isn't, but the reason is narrower than "facts give the structure, data gives the numbers". The
 model file gives the **stoichiometry**: which transitions exist, and which state each one moves an
@@ -613,7 +674,7 @@ Nobody has to be begged to write flows, or to emit facts: the agents work as the
 a classifier name what they did, and the corrected counts measure the flows (merged facts for the
 system, branch facts for the agents themselves: attempts, abandoned branches, rework).
 
-## 9. Costs, and how to keep them small
+## C. Costs and safety, if the full design is built
 
 - **The model must be written.** One small file per kind of item, by the AI, reviewable by you.
   The type menu is short (seven types) and closed; no custom merge code. The same file is the
@@ -667,27 +728,23 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
   you only watch too: they are the vocabulary, the classifier's answers and the model's structure.
   The typed merge matters only where several writers touch the same item.
 
-## 10. What would be built, in order
+## D. Build order beyond the smallest version
 
-1. The type menu and generic merge in Orchestra, driven by a model's JSON Schema.
-2. A home per subject: appends checked against current heads, re-decided by the conflict table,
-   rejections to a command audit log; claim streams with leases. Facts with globally unique (or
-   content-addressed) ids, `deps` and a hybrid clock.
-3. Session logs in an evidence store (per-session keys, secrets redacted); stamped sources and
-   taint; harness diffs per tool call; a checker that runs in a sandbox with no network and no
-   credentials, and trusts `test_fixed` fully only when the test existed at baseline or came from
-   another session (an agent that writes both the test and the fix can game it); a syntax-tree detector
-   for change facts, and a classifier for change types where no detector exists, each fact with
-   `caused_by`.
-4. Relevance-gated notices to running agents at their next write or submit; deltas on stdin for continuous programs, which can use them.
-5. Branch streams, and classification of the net change at merge.
-6. Claims with leases, as a `Map` type, for work allocation without a scheduler.
-7. The setup brief asks for the model first, then the collector and processors that import it.
-8. Later: syncing between Orchestras (CRDT merge, admission against the causal past, violations as
-   a view, triggers only on live appends); undo by id; replayable code facts; `Text`.
+After section 3, each step only when its row in section 3's "not yet" table is triggered:
 
-Before any of it: measure how often several writers touch one non-code record at once, on real
-incident channels and tickets (an operator's guess: near zero, apart from severity, status and the
-update draft, which authority settles, not merge). Steps 1 to
-4 are the coordination core; section 7b's uses need only step 3 and can come first; the rest follows
-when a real case asks for it.
+1. Taint and reduced profiles for triggered agents; secrets redacted from what is stored.
+2. A real classifier for change types where no detector exists, with egress recorded.
+3. Relevance-gated notices to running agents at their next write or submit (deltas on stdin only
+   for continuous programs, which can use them).
+4. A home per subject: appends checked against current heads, re-decided by the field types as the
+   conflict table, machines' rejections to a command audit log, people never rejected; `Owned`
+   fields first; claim streams with leases for jobs and for actions on targets.
+5. The rest of the type menu, `deps` and a hybrid clock; an evidence store with per-session keys.
+6. Branch streams, the merge-time explanation check.
+7. Syncing between Orchestras: signed facts, per-peer allowlists, CRDT merge, admission against the
+   causal past, violations as a view, triggers only on live appends.
+8. Replayable code facts and fact-assisted rebase; undo by id; `Text`.
+
+Before any of it: the measurement in section 3, step 6, on real incident channels and tickets too
+(an operator's guess: near zero, apart from severity, status and the update draft, which authority
+settles, not merge).
