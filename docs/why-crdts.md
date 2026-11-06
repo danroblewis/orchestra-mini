@@ -1,21 +1,14 @@
-# Why CRDTs, for a fleet of agents
+# Facts from agents' work, and when to merge them
 
-This document began as the case for making the things agents work on CRDTs whose operations are
-named facts. After eight critical reviews (a CRDT researcher, an event-sourcing practitioner, an
-agent-harness engineer, a system-identification researcher, a patch-theory expert, an incident
-commander, a security engineer, a simplicity advocate) and three experiments, its thesis is
-narrower:
+**The harness, not the agent, should produce facts about agents' work: a diff per turn, a
+syntax-tree detector and a test checker. Build those now (section 3). Whether shared records that
+are not code need a merge design (CRDTs, or an event store per record) depends on how often several
+writers touch one record, which nobody has measured; section 3 measures it, and Appendix A is the
+design if they do.**
 
-**Facts about agents' work should come from the harness, not from the agents (a diff per turn, a
-syntax-tree detector, a test checker, and a classifier where no detector exists), and they are
-useful now, for handing work over, review, scope fences and counting flows. The CRDT and
-event-store machinery is for many writers on one shared record that is not code, which nobody has
-measured yet; it is kept, in full, in Appendix A, as the design to use if the measurement says
-so.**
-
-The body is what to believe and build now (sections 1 to 5). The appendices are the design if
-concurrent writers turn out to be common (A), facts and the system dynamics model (B), the costs
-and safety of the full design (C), and its build order (D).
+The body (sections 1 to 5) is what to believe and build now. The appendices are the merge design
+(A), facts and the system dynamics model (B), the costs and safety of the full design (C), its
+build order (D), and the measurements (E).
 
 ## 1. The coordination problems, as they happen today
 
@@ -54,124 +47,50 @@ claims on jobs), and the facts about the work itself, which the git workflow doe
 all. How often several writers really touch one record at once is not yet measured; it is the
 first thing to measure before building more than the smallest version in section 3.
 
-## 2. Facts from agent work: where they come from, measured
+## 2. Facts from agents' work: where they come from
 
-Asking agents to emit facts themselves (a `rename_function` tool instead of Edit, a
-`report_work` call at the end of each turn) puts the burden on the one participant least reliable
-at formal output, and the lab measured it. Forced (only semantic tools and one reporting tool
-available), agents used them every time. Given optional `record_*` fact tools (one per fact name,
-generated from the catalogue) beside Edit and Bash (strategy F): unprompted, 0 calls in 8 tasks;
-told once to record, calls in 7 of 8, covering 10 of the 26 changes the detector found; told to
-record after every change, calls in 5 of 8, covering 8 of 26 (with eight runs a condition these two
-are indistinguishable: 0.22–0.57 and 0.17–0.50). In about eight prompted chances it never recorded
-the intent (`test_fixed`), which still allows a true rate up to about 30%: it records the code change
-and stops. Its records carry no link to the edits, so they join the detector's facts only by function
-name. What they do add is a reason per change, which no detector produces. An agent records some of
-its work when asked, rarely all of it, and seldom the part that matters most; this is one model and
-two prompt wordings.
-Agents should work the way they already work. The facts are derived, at two
-levels:
+Agents do not record facts about their own work reliably. In the lab, given optional tools to
+record each kind of fact, an agent recorded nothing unprompted, and when asked, under half of what
+it changed and almost never the intent ("fixed the test"); the details are in Appendix E. So agents
+work the way they already work, and the facts are derived:
 
-- **Evidence: the session log, kept beside the event log, not in it.** Session entries are
-  high-volume and hold everything an agent read, secrets and personal data included; they are not
-  domain events, and mixing them into the domain log is how an event-sourced monolith starts. They
-  go into an **evidence store**: content-addressed, encrypted with one key per session (deleting the
-  key erases the session's evidence wherever it was copied, which is crypto-shredding, with the
-  limits in Appendix C), with its own retention. Secrets are redacted from tool results (with
-  gitleaks-style rules) before anything is stored or classified. They merge by union and never conflict, because nothing in them is shared. The event
-  log refers to them by hash.
-- **Named facts: derived from the log by programs first, a classifier second.** The harness
-  records the exact before and after of every tool call (a hook that diffs the working tree, so an
-  edit made through the shell is caught too); a syntax-tree detector turns each diff into change
-  facts (`function_renamed`, `parameter_added`, `function_body_changed`, `test_added`); a checker
-  turns intent into work facts only against an outcome (the test failed on the baseline and passes
-  after). A cheap classifier over a window of the session (the request, the agent's reasoning, the
-  tool calls and results) adds what programs cannot: the *why*, and the windows no catalogue entry
-  fits. Detector and classifier output is recorded as what it is, an observation
-  (`classification.recorded`, with its label, deriver, version and confidence), not as a domain
-  fact. It becomes a domain fact only when it is checked (and, for a branch, at merge), submitted as
-  a command the subject's home accepts or rejects. The named fact points back to its evidence:
+- **The evidence is the session log and git.** The harness already writes each agent's session log
+  (every message, tool request and result); git holds every change. Facts cite tree and commit
+  hashes and session entries. Session logs stay where the harness writes them (a separate store, if
+  they ever must be shared or deleted: Appendix C).
+- **Change facts come from a program.** The harness diffs the working tree (so an edit made through
+  the shell is caught too), and a syntax-tree detector names each change: `code.function_renamed`,
+  `code.parameter_added`, `code.function_body_changed`, `test.added`. The names and their fields are
+  the **catalogue**: one model file listing every fact type. A change the catalogue has no name for
+  becomes a catch-all fact (`other`), which is a sign the catalogue needs a new entry.
+- **Work facts come from a checker, against an outcome.** `work.test_fixed` only when the test
+  failed before and passes after (section 3, step 2), never because an agent says so.
+- **A classifier names the change type where no detector exists** (shell output, other languages,
+  non-code work), once one beats a tool-name baseline on human labels; none has yet (Appendix E).
+- **The agent's own words are notes**, the *why* attached to a fact, not the fact.
 
-  Measured (`~/agent-facts-lab`: eight small tasks on a ~100-line Python module, one run each, one
-  model, one harness in single-prompt mode; $3.20 in all). Read every number as a feasibility check
-  on a development set, not a benchmark. The intervals below are 95% Wilson intervals that ignore
-  clustering, so the real ones are wider, and runs of the same task are near-duplicates, so the
-  effective sample is closer to eight tasks than to the window counts.
-
-  - **The detector** found 13 of 13 required catalogued change facts on tasks 1–7 (95% CI
-    0.77–1.00), including edits made with `sed`; but it was debugged on those same tasks, by the
-    author of the expected facts, and on task 8, the one written afterwards, it lacked
-    `parameter_renamed`.
-  - **Haiku over a session window alone** was poor at naming *which function* changed (an Edit
-    window has no line context); scored by type only, on the same ten windows, it got 9 of 10.
-  - **Jev (TypeSafe's hosted classifier**, which answers multiple-choice questions with
-    probabilities and writes no text) was scored against the detector's labels, not human ones. It
-    agreed on 48 of 51 change windows (0.84–0.98), but 27 of those were semantic-tool calls whose
-    name states the label, and a lookup on the tool name alone gets 34 of 51. On the windows it is
-    wanted for, Edit and Bash, it agreed on 21 of 24 (0.69–0.96), Bash alone 10 of 13; at 0.95
-    confidence it answered only about half of those. One confident error labelled a *failed* `sed`
-    as `test.added`: it labels what the agent tried, not what happened. Its real advantages over
-    Haiku are 67 ms, $0.00004 a call and real probabilities, not measured accuracy.
-  - **Intent from one window** ("does this fix a failing test?") came out near chance (5 of 8
-    positives, from two tasks, with probabilities 0.44–0.77); a longer window was never tried.
-  - **A small local classifier** (sentence embeddings and logistic regression) scored 0.43, but held
-    out by task, 16 of 51 change windows had a class with no training example, so this says nothing
-    about how much data one would need. No local classifier is known to work yet.
-
-  So, provisionally: the detector for change facts where a syntax tree exists; a classifier for the
-  change type where none does (shell output, other languages, non-code work), adopted only once it
-  beats a tool-name baseline on human labels; the checker for intent; agents' own records as
-  optional notes of why. Windows reach a hosted classifier only where the project allows it
-  (`classifier: hosted` or `none`, set once; at work the default is `none`, until a local one is
-  shown to work), and every send is recorded (`egress.sent`, with the vendor, the window's keyed hash
-  and its size).
+(Semantic tools, such as a `rename_symbol` tool that performs a refactoring, are another source:
+the tool call is the fact. Agents use them when they are the only way to edit, and less when Edit is
+there.)
 
 ```jsonl
-{"type": "classification.recorded", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["evidence:sha256:41e0…", "evidence:sha256:42b9…"], "data": {"label": "code.function_body_changed", "lines_changed": 2}}
-{"type": "work.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "checker", "id": "5d1a…", "caused_by": ["c7…", "evidence:sha256:38aa…"], "data": {"by": "agent/worker-3", "failed_before": true, "passes_after": true, "why": "reserve compared the quantity to on_hand instead of on_hand - reserved"}}
+{"type": "code.function_body_changed", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["git:tree:41e0…", "session:7f3a#e41"], "data": {"lines_changed": 2}}
+{"type": "work.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "checker", "id": "5d1a…", "caused_by": ["c7…"], "data": {"by": "agent/worker-3", "failed_before": true, "passes_after": true}}
+{"type": "work.noted", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "agent/worker-3", "caused_by": ["5d1a…"], "data": {"why": "reserve compared the quantity to on_hand instead of on_hand - reserved"}}
 ```
 
-Three rules make derived facts safe:
+Three rules:
 
-1. **A classification is recorded once and never rerun.** Replicas must apply the same operations,
-   and a model is not deterministic, so the label is itself the fact, with the classifier's version
-   and confidence. Replicas copy the label; they never reclassify. A better classifier later records
-   new classifications that supersede the old ones; it never rewrites them. A classification's id is
-   content-addressed, `hash(label, subject, caused_by)`, without the deriver's version: two
-   Orchestras, or two versions of the classifier, that agree produce the same id, and union
-   deduplicates it; where they disagree, the newer supersedes the older on the same evidence, and
-   everything counted from it (the system dynamics model's flows included) is a projection,
-   rebuilt. Every other fact carries a globally unique id (a UUID, not a local sequence).
-2. **Facts that replay and facts that describe are different.** A `function_renamed` produced by a
-   rename tool can be applied again on top of someone else's change, but only if it is stored as an
-   *intent* ("rename symbol S to N", re-executed on the new base, with preconditions such as "N is
-   free"), not as the change set it made at its base. The lab's one pair (a rename and a change to
-   the same function's body) commuted only through a hand-written rename map, an operational
-   transform written for that pair; a body that mentions the renamed function breaks it, and the
-   text baseline was `git merge-file`, not a structured merge tool (Mergiraf, Spork, jDime), which
-   would likely have merged the pair too. And `function_body_changed` holding a whole new body is a
-   register write: two agents' body edits become a conflict, worse than git's line merge. Replay
-   also depends on semantic tools, which today reformat code a little and lack operations (renaming
-   a parameter, removing a test). A `test_fixed` derived from a session describes an edit made as text, and git still
-   merges that text. So for code, derived facts mostly describe, and the merge of the code stays in
-   git unless a fact replays. The CRDT's own territory is the shared record that is not code:
-   items, claims, findings, statuses, the model.
-
-3. **Taint propagates.** Session windows contain tool results from outside (a fork's CI log, a
-   ticket body, a web page), and text in them can steer a classifier, a decision or the next agent.
-   A fact derived from evidence with external tool results is `tainted`, along `caused_by`. It
-   still triggers machines, without asking anyone, but a tainted trigger runs its machine in a
-   reduced profile (no push, no secrets in its environment, an allowlisted network): less
-   capability, not an approval gate. `on:` matches only types and enumerated fields, never free
-   text, and free-text fields (`why`, a finding's text, timeline entries) are shown to agents as
-   quoted data, not instructions. Each chain of triggers carries a depth and a spending budget along
-   `caused_by`, and stops when it is spent.
-
-Agents can still write directly when they have a natural tool for it (a decision agent's answer,
-a claim), and programs always can. Strictly, what an agent writes is a **command**, an intent, and
-the subject's home is the command handler that turns it into a fact or rejects it; merge-time
-classification is command handling too. A rejected command changed nothing, so it goes to a command
-audit log, not into the item's fold. Derivation is for the work that happens in free form.
+1. **Recorded once.** A derived fact's id is deterministic (section 3, step 3), so deriving it again
+   produces the same id and Orchestra drops it.
+2. **For code, facts describe; git merges.** A fact like `test_fixed` describes an edit made as
+   text, and git still merges the text. Facts that could themselves be replayed onto someone else's
+   change are a later and doubtful addition (A.3).
+3. **Untrusted text never triggers.** Session windows contain tool results from outside (a fork's CI
+   log, a ticket body, a web page) that can steer a classifier or the next agent. `on:` matches only
+   types and enumerated fields, never free text, and free-text fields (a `why`, a finding) are shown
+   to agents as quoted data. Fuller protection (taint along `caused_by`, reduced profiles, budgets
+   per chain of triggers) is in section 3's "not yet" table.
 
 ## 3. The smallest version, in orchestra-mini
 
@@ -182,11 +101,11 @@ Built as ordinary machines and events, with none of orchestra-mini's six contrac
    `code.function_body_changed`, `test.added` and the rest, with subject `path::symbol` and the run
    in `data`. Per turn rather than per tool call: the lab's net pass over the whole run is what
    joined renames to their call sites anyway.
-2. **A checker machine**, `on:` the agent's turn completing, needing no claim from the agent. It
+2. **A checker machine**, `on:` the agent's turn completing, needing no assertion from the agent. It
    runs the tests at the baseline and at the result, in a sandbox with no network and no
    credentials, and prints `work.test_fixed` only when the test **existed at the baseline and failed
    there**, passes after, the test function itself is unchanged, and a rerun rules out a flake. (The
-   lab's checker only checked the agent's claims, and counted a newly added test as "failed
+   lab's checker only checked the agent's assertions, and counted a newly added test as "failed
    before", so a new passing test, or a weakened one, would have counted as a fix.)
 3. **Deterministic ids for derived facts**, `hash(type, subject, key, base..head)`, where `key` is
    the fact's distinguishing data (the parameter's name, say), so two `parameter_added` facts on one
@@ -214,7 +133,7 @@ no new code.
 
 | Not yet | Until |
 |---|---|
-| reduced profiles for tainted triggers (section 2, rule 3) | an agent with push rights is triggered from outside input; the README's own example already is, so this is first in line |
+| taint along `caused_by`, reduced profiles for tainted triggers, a depth and spending budget per chain of triggers | an agent with push rights is triggered from outside input; the README's own example already is, so this is first in line |
 | a classifier (Jev or local) | on about 300 human-labelled Edit, Bash, other-language and non-code windows, it beats a tool-name baseline by 10 points with 60% coverage at 0.95 |
 | relevance-gated notices to running agents | the query in step 6 shows real overlap |
 | a home per subject, the field types, `deps` (Appendix A) | the query shows several writers on one record's fields |
@@ -222,6 +141,8 @@ no new code.
 | syncing between Orchestras, signing, allowlists | a second Orchestra holds the same items |
 | replayable code facts, fact-assisted rebase | on about 100 conflicting agent-branch pairs, at least 10% of what a structured merge tool (Mergiraf) leaves is fixed by replay |
 | growing the catalogue as a priority | on 3–5 real repositories, with facts labelled by two people blind to the detector, its recall is under 0.9 or catch-all facts exceed 20% |
+| undo of one run's facts, by id | a bad run's record has to be taken back while others keep working |
+| branch streams, and facts from the net change at merge | branch work has to be counted apart from what landed |
 | trusting `test_fixed` beyond notes | on about 50 runs with tasks that tempt cheating (edit the test, add one, delete one, a flaky test), false fixes are rare |
 
 ## 4. What the facts are for
@@ -232,30 +153,20 @@ Most of the value may be in uses that need no merge at all:
   agent. Deterministic and cheap.
 - **Tripwires on the session log.** Cheap classifiers that spot looping, repeated failing edits, or
   "done" claimed with no test run, and stop or redirect the agent. Acted on, not recorded as facts.
-- **Fact-assisted rebase.** On a git conflict, invert the agent's replayable facts, merge the text,
-  and replay them on the new main, handing back only the remaining hunks. This is RefMerge (Ellis,
-  Nadi and Dig, 2022; also MolhadoRef, IntelliMerge), whose evaluation found it removes some
-  conflicts and introduces others. Failed preconditions (the name is taken, a concurrent new call
-  uses the old name, two renames of one symbol) are conflicts, never silent results, and CI runs on
-  the replayed result: equal trees in either order is convergence, not correct code. Measure first
-  what share of agent-branch conflicts a structured merge tool leaves that replay would fix; if it is
-  small, code facts are for prevention (scope fences, scheduling), not merging.
-- **Scheduling.** Predict which symbols a task will touch from similar past tasks' facts, and run
-  overlapping tasks one after another instead of in parallel.
 - **Review.** The reviewer reads the fact chain (named facts, why, checker verdicts) before the
-  diff, and checks the unverified claims first.
+  diff, and checks the unverified assertions first.
 - **The incident scribe.** A timeline built from facts that already exist (deploys, alerts, pages,
   actions, findings, severity changes), each entry linked to its evidence, in the evidence's
   wall-clock time.
 - **Duplicate investigations.** Intersect running sessions' reads (the same dashboards, log queries,
   hypotheses) and tell the commander "agents 2 and 5 and a person are all on the connection pool".
-- **Stale drafts.** Flag the status draft when a mitigation fact has landed since its `deps`, before
-  it is published.
+- **Stale drafts.** Flag a status draft whose run is marked `stale` (section 3, step 4) before it is
+  published.
 - **Judged mitigations.** Before an action, record a prediction ("the rollback brings errors under
   1% within 5 minutes"); judge it against the metrics; a mitigation that does not hold does not
   close the incident. The model's expected recovery with no action is the counterfactual a
   postmortem needs, since postmortems, like regressions, credit the last action taken.
-- **Growing the catalogue.** Every `other` and every claim rejected for want of a fact type goes on
+- **Growing the catalogue.** Every `other` and every assertion rejected for want of a fact type goes on
   a queue of proposed new facts.
 
 ## 5. When CRDTs earn their place
@@ -263,7 +174,8 @@ Most of the value may be in uses that need no merge at all:
 If the measurement shows several writers on one shared record, Appendix A is the design, and its
 shape is settled by the reviews: **authority first** (fields with an owning role, such as an
 incident's severity and status, are decided by that role, and agents propose); **a home per
-subject** for everything else that is decided while connected (appends checked against what the
+subject** (one Orchestra that appends a subject's facts and checks each against what its
+writer had read, like an event store's optimistic concurrency) for everything else that is decided while connected (appends checked against what the
 writer read, re-decided by a program using the field types as the conflict table, rejecting
 machines but never people); and **CRDT merge only where there is no home to ask** (offline, or two
 Orchestras replicating each other). A CRDT gives convergence, not correctness, and cannot give
@@ -271,12 +183,12 @@ mutual exclusion; the appendix says which rules hold without coordination and wh
 
 ## A. If concurrent writers are common: the merge design
 
-### A.1 The key observation: long-running agents are disconnected replicas
+### A.1 Agents as stale replicas, and the objection
 
 CRDTs exist for replicas that edit the same data while disconnected, then sync, and must agree
 without a coordinator. An agent that reads an item and then thinks for four minutes *is* a
 disconnected replica: it holds a copy, edits it on its own, and syncs back late. Fifty of them are
-fifty replicas, each four minutes stale, each with its own edits. That is the CRDT problem exactly,
+fifty replicas, each four minutes stale, each with its own edits. That resembles the CRDT problem,
 and it is why snapshots, locks and "last write wins on the whole object" keep failing for agents.
 
 This is close to literal, with one honest gap. An AI harness already keeps each agent's **session log**: JSON lines, each
@@ -294,6 +206,28 @@ times, however late, produce the same item, with every agent's work in it.** No 
 agent referees, no write is lost. What it does not guarantee is that the converged item is the one
 anyone *intended* (intention preservation): convergence is the easy half, and the field types and
 conflict rules in A.2 and A.4 are where intent is protected or lost.
+
+#### Facts as observations, commands, and copies
+
+In the full design, three distinctions from event sourcing matter that the body can skip:
+
+- **Derived facts are observations first.** Detector and classifier output is recorded as what it
+  is (`classification.recorded`, with its label, deriver, version and confidence) and becomes a
+  domain fact only when checked, and, for a branch, at merge.
+- **A classification is recorded once and never rerun.** Replicas must apply the same operations,
+  and a model is not deterministic, so the label is itself the fact, with the classifier's version
+  and confidence. Replicas copy the label; they never reclassify. A better classifier later records
+  new classifications that supersede the old ones; it never rewrites them. A classification's id is
+  content-addressed, `hash(label, subject, caused_by)`, without the deriver's version: two
+  Orchestras, or two versions of the classifier, that agree produce the same id, and union
+  deduplicates it; where they disagree, the newer supersedes the older on the same evidence, and
+  everything counted from it (the system dynamics model's flows included) is a projection,
+  rebuilt. Every other fact carries a globally unique id (a UUID, not a local sequence).
+- **Agents' writes are commands.** Agents can still write directly when they have a natural tool for it (a decision agent's answer,
+  a claim), and programs always can. Strictly, what an agent writes is a **command**, an intent, and
+  the subject's home is the command handler that turns it into a fact or rejects it; merge-time
+  classification is command handling too. A rejected command changed nothing, so it goes to a command
+  audit log, not into the item's fold. Derivation is for the work that happens in free form.
 
 #### The objection from event sourcing: connected and slow is not disconnected
 
@@ -477,6 +411,34 @@ A CRDT's history is a DAG of changes, like git's, and a version is a set of head
   things by stable ids, which Orchestra's subjects already are (`owner/repo/issues/42`): two
   Orchestras that each saw the issue merge their facts onto the same item.
 
+#### Replayable and descriptive code facts
+
+**Facts that replay and facts that describe are different.** A `function_renamed` produced by a
+rename tool can be applied again on top of someone else's change, but only if it is stored as an
+*intent* ("rename symbol S to N", re-executed on the new base, with preconditions such as "N is
+free"), not as the change set it made at its base. The lab's one pair (a rename and a change to
+the same function's body) commuted only through a hand-written rename map, an operational
+transform written for that pair; a body that mentions the renamed function breaks it, and the
+text baseline was `git merge-file`, not a structured merge tool (Mergiraf, Spork, jDime), which
+would likely have merged the pair too. And `function_body_changed` holding a whole new body is a
+register write: two agents' body edits become a conflict, worse than git's line merge. Replay
+also depends on semantic tools, which today reformat code a little and lack operations (renaming
+a parameter, removing a test). A `test_fixed` derived from a session describes an edit made as text, and git still
+merges that text. So for code, derived facts mostly describe, and the merge of the code stays in
+git unless a fact replays. The CRDT's own territory is the shared record that is not code:
+items, claims, findings, statuses, the model.
+
+- **Fact-assisted rebase.** On a git conflict, invert the agent's replayable facts, merge the text,
+  and replay them on the new main, handing back only the remaining hunks. This is RefMerge (Ellis,
+  Nadi and Dig, 2022; also MolhadoRef, IntelliMerge), whose evaluation found it removes some
+  conflicts and introduces others. Failed preconditions (the name is taken, a concurrent new call
+  uses the old name, two renames of one symbol) are conflicts, never silent results, and CI runs on
+  the replayed result: equal trees in either order is convergence, not correct code. Measure first
+  what share of agent-branch conflicts a structured merge tool leaves that replay would fix; if it is
+  small, code facts are for prevention (scope fences, scheduling), not merging.
+- **Scheduling.** Predict which symbols a task will touch from similar past tasks' facts, and run
+  overlapping tasks one after another instead of in parallel.
+
 **Code subjects are names, not identities.** `inventory.py::available` stops existing when it is
 renamed, which is the independent-creation problem again, inside code. Code facts need a
 symbol-lineage id (rename and move facts are edges between identities; Unison's content-addressed
@@ -491,7 +453,7 @@ absent), as do Darcs 2's exponential merges when conflicts of conflicts accumula
 
 The closest prior work is Ink & Switch's: Upwelling (drafts for writers over a CRDT, merged when
 ready) and Patchwork (branches, diffs, history and merges for any Automerge document). Their main
-finding is the same as section 2's: merging the data is solved; showing what changed, and deciding
+finding: merging the data is solved; showing what changed, and deciding
 when a branch's changes count, is the hard part. That is merge-time classification.
 
 | CRDT idea | Orchestra |
@@ -501,7 +463,7 @@ when a branch's changes count, is the hard part. That is merge-time classificati
 | working on a fork | the agent working on a branch, its facts on the branch's stream |
 | merge, keeping conflicts (a union of operations) | the branch merged: its net change re-derived from state, checked against the branch's facts |
 | an abandoned fork | an unmerged branch: an attempt, kept, never on main |
-| atomic visibility | a turn's facts sharing a transaction id |
+| atomic visibility | a turn's facts in one transaction that lists its members |
 | merging unrelated documents | two Orchestras syncing, safe because subjects are stable ids |
 
 So an agent run is a fork of the items it touches plus one new item, its session: the harness is a
@@ -555,11 +517,11 @@ key.
 which state a fact lands on depends on delivery order, so two Orchestras would accept and reject
 the same fact and diverge for good. An invariant like "never after resolved" is not monotone, and
 by the CALM theorem (and Bailis's I-confluence) it cannot be kept without coordination. So the
-check splits in two:
+check has four parts:
 
 - **Admission, against the fact's own causal past.** `requires` is evaluated on the state the
   writer had read (its `deps`). That is deterministic and final on every replica: `SeverityRaised`
-  written by someone who had already seen `resolved` is rejected everywhere, recorded as rejected,
+  a machine's `SeverityRaised` written by one that had already seen `resolved` is rejected everywhere, recorded as rejected,
   and the writer is told. A derived fact is also checked against its outcome (the test really
   passes) before it is recorded.
 - **People are never rejected.** A command from a person is accepted even when its `deps` are
@@ -601,7 +563,7 @@ named facts, their why and the checker's verdicts, not the transcript.
 
 ### A.5 Why not the alternatives
 
-| | Shared snapshots (prompts 1 and 2) | Locks or a scheduler | Last write wins per field (with a hybrid clock) | Typed CRDT with named facts |
+| | Shared snapshots | Locks or a scheduler | Last write wins per field (with a hybrid clock) | Typed CRDT with named facts |
 |---|---|---|---|---|
 | 50 interleaved writers | overwrite each other | wait for each other | mostly fine; single values silently lost | merge; conflicts on single values kept and shown |
 | Agents 4 minutes stale | their writes are wrong | they held a lock for 4 minutes | a stale write with a fresh clock beats newer work | the stale-write guard makes it a conflict; stale commands are rejected at submit |
@@ -620,7 +582,7 @@ exfiltration.
 
 ## B. Facts and the system dynamics model: "if the AI writes the facts, why estimate?"
 
-It isn't, but the reason is narrower than "facts give the structure, data gives the numbers". The
+Writing the facts is not writing the model, and the reason is narrower than "facts give the structure, data gives the numbers". The
 model file gives the **stoichiometry**: which transitions exist, and which state each one moves an
 item from and to. It also gives part of the **measurement map**: which facts count which
 transitions. It does not give the **rate laws**: what each transition's rate depends on (load, the
@@ -637,7 +599,7 @@ the facts narrow the search, they don't settle it.
 | | the links to the observed system (does a deploy-fixing flow move the error rate, with what lag?) |
 | | hidden states nobody declared, where some measured flow depends on them (Orchestra's observability check tests exactly this) |
 
-Two corrections to what this document used to say. The task queue was not "found so well because
+Three corrections to earlier explanations. The task queue was not "found so well because
 its structure was given": its stocks balance its counters exactly, an accounting identity, and no
 rate law was identified. The kube simulation failed for recorded, unrelated reasons (loops through
 auxiliaries the loop finder could not represent, a step size longer than the autoscaler's settling
@@ -698,11 +660,19 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
 
 ## C. Costs and safety, if the full design is built
 
+- **An evidence store, once session logs must be shared or deleted.** Session entries are
+  high-volume and hold everything an agent read, secrets and personal data included; they are not
+  domain events, and mixing them into the domain log is how an event-sourced monolith starts. They
+  go into an **evidence store**: content-addressed, encrypted with one key per session (deleting the
+  key erases the session's evidence wherever it was copied, which is crypto-shredding, with the
+  limits below), with its own retention. Secrets are redacted from tool results (with
+  gitleaks-style rules) before anything is stored or classified. They merge by union and never conflict, because nothing in them is shared. The event
+  log refers to them by hash.
 - **The model must be written.** One small file per kind of item, by the AI, reviewable by you.
-  The type menu is short (seven types) and closed; no custom merge code. The same file is the
+  The type menu is short (eight types) and closed; no custom merge code. The same file is the
   classifier's list of answers.
-- **Orchestra must implement the types once**: a few hundred lines for Register, Choice, Set, Map,
-  Log and Counter (Text is a library, pycrdt, if ever needed), plus validation of `requires` and the
+- **Orchestra must implement the types once**: a few hundred lines for Owned, Register, Choice, Set,
+  Map, Log and Counter (Text is a library, pycrdt, if ever needed), plus validation of `requires` and the
   `deps` and clock bookkeeping.
 - **Facts must be named well, and now that is measurable.** A bad model (a fact called `updated`
   that sets everything) brings back the snapshot problems. A missing name shows up directly: as a
@@ -730,7 +700,7 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
 - **Orchestra is one more thing that can fail in an outage.** An incident's home must not share
   failure domains with the systems it records (the same cloud, database or network); when it is
   unreachable, writes append locally and merge later, and the incident channel stays the record of
-  last resort. And responders under stress will not learn seven field types: the page shows them a
+  last resort. And responders under stress will not learn eight field types: the page shows them a
   timeline, owners and proposals, never heads or violations.
 - **`source` is stamped, not claimed.** Any machine can print `source: person/commander`, which
   with `Owned` fields and "people are never rejected" would be a privilege escalation. So Orchestra
@@ -752,21 +722,83 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
 
 ## D. Build order beyond the smallest version
 
-After section 3, each step only when its row in section 3's "not yet" table is triggered:
+After section 3, each step when its row in section 3's "not yet" table is triggered:
 
-1. Taint and reduced profiles for triggered agents; secrets redacted from what is stored.
-2. A real classifier for change types where no detector exists, with egress recorded.
+1. Taint along `caused_by`, reduced profiles for triggered agents, budgets per chain; secrets
+   redacted from what is stored.
+2. A classifier for change types where no detector exists, with egress recorded.
 3. Relevance-gated notices to running agents at their next write or submit (deltas on stdin only
    for continuous programs, which can use them).
-4. A home per subject: appends checked against current heads, re-decided by the field types as the
-   conflict table, machines' rejections to a command audit log, people never rejected; `Owned`
-   fields first; claim streams with leases for jobs and for actions on targets.
-5. The rest of the type menu, `deps` and a hybrid clock; an evidence store with per-session keys.
-6. Branch streams, the merge-time explanation check.
+4. A home per subject, with `deps` and a hybrid clock: appends checked against current heads,
+   re-decided by the field types as the conflict table, machines' rejections to a command audit log,
+   people never rejected; `Owned` fields first; claim streams with leases for jobs and for actions
+   on targets; then the rest of the type menu.
+5. An evidence store with per-session keys.
+6. Branch streams, the merge-time explanation check; undo by id.
 7. Syncing between Orchestras: signed facts, per-peer allowlists, CRDT merge, admission against the
    causal past, violations as a view, triggers only on live appends.
-8. Replayable code facts and fact-assisted rebase; undo by id; `Text`.
+8. Replayable code facts and fact-assisted rebase; `Text`.
 
 Before any of it: the measurement in section 3, step 6, on real incident channels and tickets too
 (an operator's guess: near zero, apart from severity, status and the update draft, which authority
 settles, not merge).
+
+## E. Measurements
+
+From `~/agent-facts-lab`.
+
+Asking agents to emit facts themselves (a `rename_function` tool instead of Edit, a
+`report_work` call at the end of each turn) puts the burden on the one participant least reliable
+at formal output, and the lab measured it. Forced (only semantic tools and one reporting tool
+available), agents used them every time. Given optional `record_*` fact tools (one per fact name,
+generated from the catalogue) beside Edit and Bash (the lab's strategy F): unprompted, 0 calls in 8 tasks;
+told once to record, calls in 7 of 8, covering 10 of the 26 changes the detector found; told to
+record after every change, calls in 5 of 8, covering 8 of 26 (with eight runs a condition these two
+are indistinguishable: 0.22–0.57 and 0.17–0.50). In about eight prompted chances it never recorded
+the intent (`test_fixed`), which still allows a true rate up to about 30%: it records the code change
+and stops. Its records carry no link to the edits, so they join the detector's facts only by function
+name. What they do add is a reason per change, which no detector produces. An agent records some of
+its work when asked, rarely all of it, and seldom the part that matters most; this is one model and
+two prompt wordings.
+
+Measured (`~/agent-facts-lab`: eight small tasks on a ~100-line Python module, one run each, one
+model, one harness in single-prompt mode; $3.20 in all). Read every number as a feasibility check
+on a development set, not a benchmark. The intervals below are 95% Wilson intervals that ignore
+clustering, so the real ones are wider, and runs of the same task are near-duplicates, so the
+effective sample is closer to eight tasks than to the window counts.
+
+- **The detector** found 13 of 13 required catalogued change facts on tasks 1–7 (95% CI
+  0.77–1.00), including edits made with `sed`; but it was debugged on those same tasks, by the
+  author of the expected facts, and on task 8, the one written afterwards, it lacked
+  `parameter_renamed`.
+- **Haiku over a session window alone** was poor at naming *which function* changed (an Edit
+  window has no line context); scored by type only, on the same ten windows, it got 9 of 10.
+- **Jev (TypeSafe's hosted classifier**, which answers multiple-choice questions with
+  probabilities and writes no text) was scored against the detector's labels, not human ones. It
+  agreed on 48 of 51 change windows (0.84–0.98), but 27 of those were semantic-tool calls whose
+  name states the label, and a lookup on the tool name alone gets 34 of 51. On the windows it is
+  wanted for, Edit and Bash, it agreed on 21 of 24 (0.69–0.96), Bash alone 10 of 13; at 0.95
+  confidence it answered only about half of those. One confident error labelled a *failed* `sed`
+  as `test.added`: it labels what the agent tried, not what happened. Its real advantages over
+  Haiku are 67 ms, $0.00004 a call and real probabilities, not measured accuracy.
+- **Intent from one window** ("does this fix a failing test?") came out near chance (5 of 8
+  positives, from two tasks, with probabilities 0.44–0.77); a longer window was never tried.
+- **A small local classifier** (sentence embeddings and logistic regression) scored 0.43, but held
+  out by task, 16 of 51 change windows had a class with no training example, so this says nothing
+  about how much data one would need. No local classifier is known to work yet.
+
+So, provisionally: the detector for change facts where a syntax tree exists; a classifier for the
+change type where none does (shell output, other languages, non-code work), adopted only once it
+beats a tool-name baseline on human labels; the checker for intent; agents' own records as
+optional notes of why. Windows reach a hosted classifier only where the project allows it
+(`classifier: hosted` or `none`, set once; at work the default is `none`, until a local one is
+shown to work), and every send is recorded (`egress.sent`, with the vendor, the window's keyed hash
+and its size).
+
+## History
+
+This document began as the case for making everything agents share a CRDT whose operations are
+named facts. It was reviewed, in turn, by a CRDT researcher, an event-sourcing practitioner, an
+agent-harness engineer, a system-identification researcher, a patch-theory expert, an incident
+commander, a security engineer, a simplicity advocate, an evaluation methodologist and an editor,
+and tested by the experiments in Appendix E. Each review narrowed it to what it says now.
