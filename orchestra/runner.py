@@ -47,7 +47,7 @@ class Runner:
         self.stop = stop or threading.Event()
         self.quiet = quiet
         self.events = Events.for_project(project)
-        self.publisher = Publisher(self.events)
+        self.publisher = Publisher.for_project(project, self.events)
         self.store = metrics.for_project(project)
         self.log = FactLog(self.events)
         self.builder = Builder(project, log=self.log)

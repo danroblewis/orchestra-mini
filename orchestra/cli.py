@@ -13,7 +13,6 @@ from pathlib import Path
 
 from . import __version__, hooks, metrics
 from .config import ConfigError, OldConfig
-from .events import Events
 from .lines import DUPLICATE, REPEAT, Publisher, fact
 from .project import load, repo_root
 
@@ -112,7 +111,8 @@ def cmd_emit(args) -> int:
     if os.environ.get("ORCHESTRA_CAUSEDBY") and not ev.get("causedby"):
         ev["causedby"] = os.environ["ORCHESTRA_CAUSEDBY"]
     ev["depth"] = depth if ev.get("causedby") else 0
-    done = Publisher(Events.for_project(project)).publish(ev)
+    pub = Publisher.for_project(project)
+    done = pub.publish(ev)
     print(ev["id"] + {DUPLICATE: " (duplicate: already on the bus)", REPEAT: " (a repeat: it says nothing new)"}.get(done, ""))
     return 0
 

@@ -44,14 +44,19 @@ at, and are changed and rebuilt freely. Work in this order.
      made before data exists; other things a fact concerns (the reviewer, the commit, a ticket a
      pull request mentions) go in `data` by their ids, so a projection can join them later;
    - `type`: `<system>.<noun>.<verb>` (`jira.issue.status_changed`, `github.pr.reviewed`);
+   - `source`: who acted, when the record names them (`person.github.<author>` for a commit or a
+     review); else the collector's default;
    - `time`: the source's time for the change, not now;
    - `data`: the record as the source gives it, its field names and nesting kept (a Jira history
-     with its list of changed items, each with both sides), leaving out bodies, HTML and anything
-     over 4 KB, and saying so in `truncated`. Renaming and flattening belong in projections, shared
-     through a helper module beside them (`.orchestra/projections/lib.py`).
+     with its list of changed items, each with both sides), and only what was true at the
+     record's time (never a field of the thing's current state). Leave out bodies, HTML and
+     anything over 4 KB, and list what you left out in `omitted` (`["body"]`); keep short text
+     such as a commit message, which often names a ticket. Renaming and flattening belong in
+     projections, shared through a helper module beside them (`.orchestra/projections/lib.py`).
 
    **Page every list** (a search, a changelog, a pull request's commits and reviews) to its end;
-   when the source says there are more than you fetched, put `truncated` in the fact's `data`.
+   when the source says there are more than you fetched, put `truncated: true` in the fact's
+   `data` (`query check` reports it). `truncated` means only that.
 
    **History rarely carries everything.** A thing's current state often has fields its history
    doesn't (a pull request's head commit, its state, a title that can be edited), and a fact with
@@ -65,8 +70,9 @@ at, and are changed and rebuilt freely. Work in this order.
    no state of its own. A subject known only by observations never gets a `.closed` type; a
    projection decides when it is `done`. Observations sample: a state shorter than the
    collector's `every` may never be seen, and a change is known only to have happened between the
-   observation's `prevseen` (when the old state was last seen) and its `time`. Choose `every`
-   against the shortest state a question cares about, and say the limit in the report.
+   observation's `prevseen` (when the old state was last seen) and its `time`. Before choosing
+   `every`, watch the source for a few minutes to see how long its states last, choose `every`
+   below the shortest one a question cares about, and say the limit in the report.
 
    Name a subject so it is one thing whatever else is watched: `acme/api/branch/main`, not `main`.
 4. **Prove the facts.** Run each collector by hand and look at its stdout (an adapter:
@@ -75,16 +81,20 @@ at, and are changed and rebuilt freely. Work in this order.
    `orchestra query facts --subject S` for three real subjects and check that every field a
    question needs is there; check `orchestra query metrics` for the measurements. Fix the
    collectors, not the facts' consumers, until it is so. Use the real systems, within the scope the
-   owner gave.
+   owner gave. Until you report, the log is yours: when a fact was recorded wrong (a fact is never
+   edited), fix the collector, clear the data with the reset command under "This project now",
+   and collect again, so the owner starts from facts that are right.
 5. **Only now write the projections**, and only now list them under `projections:`: one per
    question, the question as the script's first comment (`.orchestra/projections/<name>.py`).
-   Each reads facts on stdin and prints one JSON line per subject (or, with `whole: true`, per key it chooses, for a question
-   across subjects: a join, a count per person); it reads only its stdin and prints times, not ages
+   Each reads facts on stdin and prints one JSON line per subject (or, with `whole: true`, per key
+   it chooses, for a question across subjects: a join, a count per person); it reads only its stdin and prints times, not ages
    (`in_review_since`, not "2 days"). Test each on recorded facts:
    `orchestra query views NAME --input S | <command>`, then `orchestra query views NAME show S`.
    Prefer a new projection to a changed fact; when a fact's shape must change, give it a new type
    (`….v2`). Put `waiting_on` (who must act next; `owner` puts it on the Dashboard) and `done` at
-   the top level of a view when a question needs them.
+   the top level of a view when a question needs them. A view built from observations is a lower
+   bound: states shorter than the collector's `every` are missed, and repeats never reach it, so
+   it knows when a state changed, not when it was last seen; say so wherever it is quoted.
 6. **Machines that act**, when the owner asked for them: a machine is four fields, `name`,
    `command`, when it runs (`on`, `every`, or `continuous: true`), and `env` if it needs one. An AI
    step is `command: orchestra agent <prompt file>` (`continuous: true` when it should keep its
@@ -99,7 +109,8 @@ at, and are changed and rebuilt freely. Work in this order.
 7. **Done means `orchestra query check` reports nothing.** Quote it in the report.
 8. **Report in a few lines**: the questions and which projection answers each, what you set up and
    where each file is, what the pages will show (`orchestra run --web`), what `query check` said,
-   and anything left for them.
+   and anything left for them. Quote views as they are when you write the report (read them
+   again with `orchestra query views`), not as they were when you tested.
 
 ## The owner's rules
 

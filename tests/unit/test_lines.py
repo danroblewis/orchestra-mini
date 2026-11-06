@@ -84,3 +84,14 @@ def test_the_publisher_stamps_prevseen_on_a_change_after_repeats(tmp_path):
     kept = events.read(0)[0]
     assert [e["data"]["s"] for e in kept] == ["red", "green"] and "prevseen" not in kept[0]
     assert kept[1]["prevseen"] == "2026-11-05T10:01:00.000Z", "the change happened after the old state was last seen"
+
+
+def test_prevseen_survives_a_new_publisher(tmp_path):
+    events, state = Events(tmp_path / "e.jsonl"), tmp_path / "repeats.json"
+    line = '{"type": "ci.branch.observed", "subject": "b", "time": "%s", "data": {"s": "%s"}}'
+    first = Publisher(events, state)
+    publish(first, line % ("2026-11-05T10:00:00Z", "red"), salt="1")
+    publish(first, line % ("2026-11-05T10:01:00Z", "red"), salt="2")
+    first.flush()
+    publish(Publisher(events, state), line % ("2026-11-05T10:02:00Z", "green"), salt="3")   # a restart in between
+    assert events.read(0)[0][-1]["prevseen"] == "2026-11-05T10:01:00.000Z"

@@ -62,6 +62,8 @@ def start_run(project, machine, fact: dict | None, views: dict | None, publisher
               stdin=json.dumps(fact) + "\n" if fact else "", on_line=out.line)
     note = res.error or ("timed out" if res.timed_out else None) or "; ".join(out.notes) or None
     out.finish(res.rc == 0 and not res.error and not res.timed_out)
+    if hasattr(publisher, "flush"):
+        publisher.flush()
     rec.update(end=now(), exit=res.rc, **counts(out), cost_usd=out.cost, note=note, **({"skipped": True} if out.skipped else {}))
     runs.record(project, rec)
     return rec

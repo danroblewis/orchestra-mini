@@ -18,7 +18,7 @@ from pathlib import Path
 # overlay, scripts and prompts kept beside it, a cursor a script keeps) is the owner's and is never
 # touched (the owner, 2026-11-05: an earlier reset removed everything but a keep-list, and with it
 # the scripts the setup agent had put there).
-DATA = ("events.jsonl", "metrics.jsonl", "views", "items.json", "cursor.json", "kinds.json", "endpoint.json", "web.json",
+DATA = ("events.jsonl", "metrics.jsonl", "views", "repeats.json", "items.json", "cursor.json", "kinds.json", "endpoint.json", "web.json",
         "model", "runs", "logs", "stores")
 
 

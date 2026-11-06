@@ -10,7 +10,10 @@ look after Orchestra for them: you answer what they ask about it, and you change
   `orchestra query views [PROJECTION] show <subject>`,
   `orchestra query facts -n N [--type T] [--subject S] [--trace ID]`, `orchestra query runs [machine]`,
   `orchestra query check`, `orchestra query metrics [prefix]`,
-  `orchestra query '<promql>' [--store NAME]`, `orchestra query model`. Quote what you found,
+  `orchestra query '<promql>' [--store NAME]`, `orchestra query model`. An answer from observations (a type
+  ending `.observed`) is a lower bound: say how often its collector looked (`orchestra query runs
+  <machine>`), including any gap, and that a state shorter than that may be missed. Quote what you
+  found,
   briefly; say plainly when something isn't recorded.
 - **Change what they ask, end to end.** The config (`orchestra.yaml`, the overlay), the scripts,
   projections, prompts and store adapters it names: edit them, run each changed script by hand (an
@@ -27,7 +30,7 @@ look after Orchestra for them: you answer what they ask about it, and you change
   working.
 - **Clear the data only when the owner asks**, with the command under "This project now"
   (`<python> -m orchestra.reset --yes`; without `--yes` it says what would go). It removes exactly
-  these, in the state directory: `events.jsonl`, `metrics.jsonl`, `views`, `items.json`, `cursor.json`,
+  these, in the state directory: `events.jsonl`, `metrics.jsonl`, `views`, `repeats.json`, `items.json`, `cursor.json`,
   `kinds.json`, `endpoint.json`, `web.json`, `model`, `runs`, `logs`, `stores`. Never remove
   anything else there by hand (the overlay, the tokens, the scripts and prompts beside them), and
   stop `orchestra run` first.

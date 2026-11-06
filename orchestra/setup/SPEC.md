@@ -100,8 +100,10 @@ same subject, type and source, in log order. Publishing skips one when it can te
 query skips any that got past, and gives each fact its `seq`, its position in the log. So a poller
 may print the whole current state on every run and keep no state of its own. A repeat still says
 when the state was last seen unchanged: the next observation that differs carries `prevseen`, the
-time of the last repeat skipped before it, so the change happened between `prevseen` and its
-`time`.
+time of the last repeat skipped before it (kept in the state directory across restarts), so the
+change happened between `prevseen` and its `time`. In `data`, `omitted` lists fields a collector
+left out on purpose (a body, HTML); `truncated: true` says a list was not read to its end, and
+`orchestra query check` reports it.
 
 A measurement: `metric` (required, named for what it measures), `value` (required, a number),
 `labels`, `time` (RFC 3339 or Unix seconds; default now), `kind` (`counter` or `gauge`; default

@@ -92,7 +92,8 @@ def shapes(facts: list[dict]) -> list[str]:
             if cut is None or cut < 2 or len(has) - cut < 2 or any(x == has[0] for x in has[cut:]):
                 continue
             out.append(f"type {t}: the key {k} " + ("stopped appearing" if has[0] else "newly appeared")
-                       + f" after {cut} facts: the source changed its shape")
+                       + f" after {cut} facts: the collector or the source changed its shape; give the new shape a "
+                       "new type (….v2) and teach the projections both")
     return out
 
 

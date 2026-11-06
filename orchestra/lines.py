@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
+import time
+from pathlib import Path
 
 from .events import Events, envelope, now
 from .facts import Repeats, digest
@@ -68,12 +71,15 @@ class Publisher:
     repeat. What is on the bus is read once, then what was appended since (by anyone) before each
     publish."""
 
-    def __init__(self, events: Events):
+    def __init__(self, events: Events, state: Path | None = None):
         self.events = events
+        self.state = state                            # where the repeats' last-seen times are kept, if anywhere
+        self._saved = 0.0
         self._lock = threading.Lock()
         self._depth: dict[str, int] = {}             # each id on the bus, and its depth
         self._said: set[str] = set()                 # each fact's type, subject and data
         self._repeats = Repeats()
+        self._load()
         self._at = 0
         self._read = False
 
@@ -82,6 +88,33 @@ class Publisher:
             d = ev.get("depth")
             self._depth[ev["id"]] = d if isinstance(d, int) and not isinstance(d, bool) else 0
         self._said.add(content(ev))
+
+    @classmethod
+    def for_project(cls, project, events: Events | None = None) -> Publisher:
+        return cls(events or Events.for_project(project), project.path("repeats.json"))
+
+    def _load(self) -> None:
+        """The last-seen times of repeats skipped before, by any process: a repeat is never on the log,
+        so a change after a restart could not say ``prevseen`` without them."""
+        try:
+            rows = json.loads(self.state.read_text()) if self.state else []
+        except (OSError, ValueError):
+            rows = []
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, list) and len(row) == 4:
+                self._repeats.still[tuple(row[:3])] = row[3]
+
+    def flush(self, force: bool = True) -> None:
+        """Keep the last-seen times (at most once a second unless ``force``)."""
+        if self.state is None or (not force and time.monotonic() - self._saved < 1.0):
+            return
+        self._saved = time.monotonic()
+        tmp = self.state.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(json.dumps([[*k, t] for k, t in self._repeats.still.items()]))
+            tmp.replace(self.state)
+        except OSError:
+            pass
 
     def _refresh(self) -> None:
         self._read = True
@@ -116,8 +149,12 @@ class Publisher:
             if ev["id"] in self._depth:
                 return DUPLICATE
             if self._repeats.seen(ev):
+                self.flush(force=False)
                 return REPEAT
-            ev.update(self._repeats.stamp(ev))
+            stamped = self._repeats.stamp(ev)
+            if "prevseen" in stamped and "prevseen" not in ev:
+                ev.update(stamped)
+                self.flush()
             ev["recordedtime"] = now()
             self.events.bus.append(ev)
             self._take(ev)

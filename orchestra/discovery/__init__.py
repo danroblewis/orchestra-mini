@@ -52,7 +52,7 @@ def run_once(project, now: float | None = None) -> Model:
 
 def _loop(project, stop: threading.Event) -> None:
     events = Events.for_project(project)
-    publisher = Publisher(events)
+    publisher = Publisher.for_project(project, events)
     log = project.path("logs", "discovery.log")
     while not stop.is_set():
         try:
