@@ -109,8 +109,9 @@ levels:
   high-volume and hold everything an agent read, secrets and personal data included; they are not
   domain events, and mixing them into the domain log is how an event-sourced monolith starts. They
   go into an **evidence store**: content-addressed, encrypted with one key per session (deleting the
-  key erases the session everywhere it was copied, which is crypto-shredding), with its own
-  retention. They merge by union and never conflict, because nothing in them is shared. The event
+  key erases the session's evidence wherever it was copied, which is crypto-shredding, with the
+  limits in section 9), with its own retention. Secrets are redacted from tool results (with
+  gitleaks-style rules) before anything is stored or classified. They merge by union and never conflict, because nothing in them is shared. The event
   log refers to them by hash.
 - **Named facts: derived from the log by programs first, a classifier second.** The harness
   records the exact before and after of every tool call (a hook that diffs the working tree, so an
@@ -148,15 +149,16 @@ levels:
   So: the detector for change facts where a syntax tree exists; a real classifier for the change
   type where none does (other languages, shell output, non-code work) and as a cross-check, with
   0.95 as its threshold; the checker for intent; agents' own records as optional notes of why.
-  Because a classifier like Jev is deterministic, its labels can even be recomputed on any replica,
-  which softens rule 1 below for that kind of deriver.
+  Windows reach a hosted classifier only where the project allows it (`classifier: hosted` or
+  `local`, set once; at work the default is local), and every send is recorded (`egress.sent`, with
+  the vendor, the window's keyed hash and its size).
 
 ```jsonl
 {"type": "classification.recorded", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["evidence:sha256:41e0…", "evidence:sha256:42b9…"], "data": {"label": "code.function_body_changed", "lines_changed": 2}}
 {"type": "work.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "checker", "id": "5d1a…", "caused_by": ["c7…", "evidence:sha256:38aa…"], "data": {"by": "agent/worker-3", "failed_before": true, "passes_after": true, "why": "reserve compared the quantity to on_hand instead of on_hand - reserved"}}
 ```
 
-Two rules make derived facts safe in a CRDT:
+Three rules make derived facts safe:
 
 1. **A classification is recorded once and never rerun.** Replicas must apply the same operations,
    and a model is not deterministic, so the label is itself the fact, with the classifier's version
@@ -181,6 +183,16 @@ Two rules make derived facts safe in a CRDT:
    merges that text. So for code, derived facts mostly describe, and the merge of the code stays in
    git unless a fact replays. The CRDT's own territory is the shared record that is not code:
    items, claims, findings, statuses, the model.
+
+3. **Taint propagates.** Session windows contain tool results from outside (a fork's CI log, a
+   ticket body, a web page), and text in them can steer a classifier, a decision or the next agent.
+   A fact derived from evidence with external tool results is `tainted`, along `caused_by`. It
+   still triggers machines, without asking anyone, but a tainted trigger runs its machine in a
+   reduced profile (no push, no secrets in its environment, an allowlisted network): less
+   capability, not an approval gate. `on:` matches only types and enumerated fields, never free
+   text, and free-text fields (`why`, a finding's text, timeline entries) are shown to agents as
+   quoted data, not instructions. Each chain of triggers carries a depth and a spending budget along
+   `caused_by`, and stops when it is spent.
 
 Agents can still write directly when they have a natural tool for it (a decision agent's answer,
 a claim), and programs always can. Strictly, what an agent writes is a **command**, an intent, and
@@ -479,13 +491,15 @@ named facts, their why and the checker's verdicts, not the transcript.
 | Concurrent edits to collections | lost | serialized | the whole collection replaced | sets, maps and logs merge |
 | Impossible transitions | become truth | caught only if the lock holder checks | become truth | rejected at admission if the writer saw the state; otherwise flagged |
 | Undo one agent's work | restore an old snapshot, losing others' work | same | hard | its facts removed by id |
-| Several Orchestras (work and home laptops, a teammate's) | can't sync | needs a shared server | syncs: it is a CRDT too | syncs; the same merge everywhere |
+| Several Orchestras (work and home laptops, a teammate's) | can't sync | needs a shared server | syncs: it is a CRDT too | syncs signed facts, by a per-peer allowlist; evidence never syncs by default |
 
 Per-field last-writer-wins with a hybrid clock is itself a CRDT (an LWW map) and syncs between
 Orchestras without a server, so syncing is not what sets the typed version apart. What does is the
 rest of the table: stale writes made into conflicts instead of wins, collections that merge,
-admission against what the writer saw, and undo by id. Session logs and recorded classifications
-sync the same way, by union.
+admission against what the writer saw, and undo by id. Before any sync: facts are signed; each peer
+has an allowlist of subject prefixes and data classes; evidence does not sync unless a project says
+so; and a project classed as work does not sync to a personal machine, which to an employer would be
+exfiltration.
 
 ## 7b. What the facts are for, beyond merging
 
@@ -635,8 +649,17 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
   unreachable, writes append locally and merge later, and the incident channel stays the record of
   last resort. And responders under stress will not learn seven field types: the page shows them a
   timeline, owners and proposals, never heads or violations.
-- **`source` is self-declared.** Within one Orchestra that is fine; facts that cross between
-  Orchestras need signatures, or a peer can write as anyone.
+- **`source` is stamped, not claimed.** Any machine can print `source: person/commander`, which
+  with `Owned` fields and "people are never rejected" would be a privilege escalation. So Orchestra
+  assigns `source` from the machine whose stdout carried the line; a claimed source is kept as
+  `claimed_source` and grants nothing; `person/*` comes only from the authenticated page or command
+  line, and `Owned` writes and approvals check the stamped source. Facts that cross between
+  Orchestras are signed, or a peer can write as anyone.
+- **Crypto-shredding erases less than it sounds.** Deleting a session's key erases the evidence's
+  ciphertext. Free text copied out of it (a `why`, a finding, a timeline entry) must refer to the
+  evidence or be encrypted under the same key, or it survives; content addresses must be keyed
+  (HMAC), or a plaintext hash confirms a guessed secret; and a vendor's retention, a model trained on
+  windows and backups of the key store are out of reach, and are listed as such.
 - **Language-neutral.** The model exports a JSON Schema per fact, with each field's CRDT type as an
   annotation, so Orchestra (and processors in other languages) work from the schema, not from
   Python.
@@ -650,7 +673,10 @@ system, branch facts for the agents themselves: attempts, abandoned branches, re
 2. A home per subject: appends checked against current heads, re-decided by the conflict table,
    rejections to a command audit log; claim streams with leases. Facts with globally unique (or
    content-addressed) ids, `deps` and a hybrid clock.
-3. Session logs in an evidence store (per-session keys); harness diffs per tool call; a syntax-tree detector
+3. Session logs in an evidence store (per-session keys, secrets redacted); stamped sources and
+   taint; harness diffs per tool call; a checker that runs in a sandbox with no network and no
+   credentials, and trusts `test_fixed` fully only when the test existed at baseline or came from
+   another session (an agent that writes both the test and the fix can game it); a syntax-tree detector
    for change facts, a checker for work facts, and a classifier for the why and the gaps, each fact
    with `caused_by`.
 4. Relevance-gated notices to running agents at their next write or submit; deltas on stdin for continuous programs, which can use them.
