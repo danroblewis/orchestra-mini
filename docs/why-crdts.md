@@ -94,10 +94,14 @@ offline, with one set of types serving both.
 Asking agents to emit facts themselves (a `rename_function` tool instead of Edit, a
 `report_work` call at the end of each turn) puts the burden on the one participant least reliable
 at formal output, and the lab measured it. Forced (only semantic tools and one reporting tool
-available), agents used them every time. Given optional `record_*` fact tools beside Edit and Bash
-(provisional figures, strategy F): unprompted, 0 calls in 8 tasks; told once to record, calls in 7
-of 8 tasks, covering 10 of the 26 changes the detector found; told to record after every change,
-calls in 5 of 8, covering 8 of 26. An agent records some of its work when asked, never all of it.
+available), agents used them every time. Given optional `record_*` fact tools (one per fact name,
+generated from the catalogue) beside Edit and Bash (strategy F): unprompted, 0 calls in 8 tasks;
+told once to record, calls in 7 of 8, covering 10 of the 26 changes the detector found; told to
+record after every change, calls in 5 of 8, covering 8 of 26. Across all runs it never once
+recorded the intent (`test_fixed`), even on the two fix-a-test tasks: it records the code change and
+stops. Its records carry no link to the edits, so they join the detector's facts only by function
+name. What they do add is a reason per change, which no detector produces. An agent records some of
+its work when asked, never all of it, and never the part that matters most.
 Agents should work the way they already work. The facts are derived, at two
 levels:
 
@@ -128,10 +132,24 @@ levels:
   classifying session windows alone was much worse (recall 0 to 0.75 by function; 13 of 14 change
   facts by file, 1 of 8 work facts): an Edit window has no line context, so the function is lost, and
   one window cannot show "failed before". Once it named a fact the catalogue lacked
-  (`parameter_renamed`, from the agent's own words); whether it reliably adds the *why* is untested,
-  as is whether a real classification model (rather than a language model asked to pick a label)
-  does better. So the classifier is given the detector's facts and the window together, and is
-  never the only source.
+  (`parameter_renamed`, from the agent's own words).
+
+  A real classification model does much better on the change layer (strategy G: TypeSafe's Jev, a
+  hosted classifier that answers multiple-choice questions with probabilities and writes no text,
+  over 154 windows labelled by the detector): 0.94 accuracy on the windows that change code, 98%
+  right among the 86% of answers given at 0.95 confidence or more, the same answer on every rerun,
+  67 ms and $0.00004 a call (Haiku: 2.5 s and seven times the price). It names the type only; which
+  function, and the changeset, still come from the detector. On intent it fails like everything
+  else: "does this window fix a failing test?" is about 0.6, because one window cannot show the
+  failure before. A small local classifier (sentence embeddings and logistic regression) did not
+  work on so few examples (0.43); it would need on the order of a hundred labelled windows per fact
+  type, which the detector can label for free as work accumulates.
+
+  So: the detector for change facts where a syntax tree exists; a real classifier for the change
+  type where none does (other languages, shell output, non-code work) and as a cross-check, with
+  0.95 as its threshold; the checker for intent; agents' own records as optional notes of why.
+  Because a classifier like Jev is deterministic, its labels can even be recomputed on any replica,
+  which softens rule 1 below for that kind of deriver.
 
 ```jsonl
 {"type": "classification.recorded", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["evidence:sha256:41e0…", "evidence:sha256:42b9…"], "data": {"label": "code.function_body_changed", "lines_changed": 2}}
