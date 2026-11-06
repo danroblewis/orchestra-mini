@@ -236,7 +236,7 @@ when a branch's changes count, is the hard part. That is merge-time classificati
 | CRDT idea | Orchestra |
 |---|---|
 | a replica's change log | an agent's session log, wrapped |
-| fork at some heads | the agent reads an item; its Read result records the version it forked from |
+| fork at some heads | the agent reads an item; its Read results record the heads it forked from (`deps`) |
 | working on a fork | the agent working on a branch, its facts on the branch's stream |
 | merge, keeping conflicts | the branch merged, its net change classified into facts on main |
 | an abandoned fork | an unmerged branch: an attempt, kept, never on main |
@@ -250,7 +250,7 @@ fork that reaches main only by a merge.
 ## 6. Each coordination problem, solved
 
 **Stale context (1).** A running agent's stdin keeps receiving the facts that touch its item while
-it works ("since you read v41: ResponderJoined carol, FindingAdded f2, TimelineEntry x3"). It
+it works ("since what you read: ResponderJoined carol, FindingAdded f2, TimelineEntry x3"). It
 updates its working copy incrementally: deltas, not a re-read. Each delta says where it sits
 causally: a late fact that sorts *before* what the agent read (a `Log` entry inserted into history)
 is different news from one after it, and the agent is told which. Its own late writes still merge,
