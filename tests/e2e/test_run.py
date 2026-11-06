@@ -1,8 +1,9 @@
-"""``orchestra run`` end to end: a temp project whose machines are a scheduled collector of events
+"""``orchestra run`` end to end: a temp project whose machines are a scheduled collector of facts
 (three lines, one twice), a scheduled collector of metrics (Prometheus text and a metric line), a
-program on one of those event types, a continuous program, ``orchestra agent`` and ``orchestra
-decide`` run by a fake ``claude`` on PATH, and a script the agent runs from its own shell. Run for a few seconds, then the
-bus, the metrics, the items' fold, the runs and the machines are what they should be."""
+program on one of those fact types, a continuous program, ``orchestra agent`` and ``orchestra
+decide`` run by a fake ``claude`` on PATH, a script the agent runs from its own shell, and a
+projection. Run for a few seconds, then the log, the causes, the metrics, the views, the runs and
+the machines are what they should be."""
 
 from __future__ import annotations
 
@@ -18,9 +19,9 @@ from fakes import CLAUDE
 
 from orchestra import metrics, runs
 from orchestra.events import Events
-from orchestra.items import Items
 from orchestra.machines import machines
 from orchestra.project import load
+from orchestra.views import Views
 
 FEED = """
 import json
@@ -48,8 +49,21 @@ for line in sys.stdin:
     print(json.dumps({"type": "watcher.decision.seen", "subject": ev["subject"]}), flush=True)
     print(json.dumps({"metric": "decisions_seen_total", "value": 1, "kind": "counter"}), flush=True)
 """
+TICKET = """
+import json, sys
+by = {}
+for line in sys.stdin:
+    f = json.loads(line)
+    v = by.setdefault(f["subject"], {"subject": f["subject"], "said": []})
+    v["said"].append(f["type"])
+    if f["type"] == "tracker.issue.transitioned":
+        v["status"] = f["data"]["to"]
+for v in by.values():
+    print(json.dumps(v))
+"""
 CONFIG = {
     "project": "e2e",
+    "projections": [{"name": "ticket", "match": "ABC-*", "command": "projections/ticket.py"}],
     "machines": [
         {"name": "tracker", "command": "scripts/feed.py", "every": "1s"},
         {"name": "queues", "command": "scripts/queues.py", "every": "1s"},
@@ -71,6 +85,7 @@ def test_orchestra_run(tmp_path):
     script(repo / "scripts" / "watcher.py", WATCHER)
     script(repo / "scripts" / "sizer.py", SIZER)
     script(repo / "scripts" / "notify.py", NOTIFY)
+    script(repo / "projections" / "ticket.py", TICKET)
     script(fakebin / "claude", CLAUDE)
     env = {**os.environ, "ORCHESTRA_HOME": str(home), "FAKE_DIR": str(tmp_path), "FAKE_SHELL": "scripts/notify.py 'hello all'",
            "PATH": os.pathsep.join([str(fakebin), str(Path(sys.executable).parent), os.environ["PATH"]])}
@@ -84,6 +99,7 @@ def test_orchestra_run(tmp_path):
     try:
         project = load(repo)
         evs = list(Events.for_project(project).all(0))
+        ids = {e["id"]: e for e in evs}
         types = [e["type"] for e in evs]
         by = {e["type"]: e for e in evs}
 
@@ -96,7 +112,15 @@ def test_orchestra_run(tmp_path):
         assert by["sizer.issue.sized"]["source"] == "sizer" and by["agent.work.done"]["source"] == "worker"
         assert by["chat.message.posted"]["source"] == "worker", "a script run from the agent's shell emits as the agent"
         assert by["decision.made"]["data"] == {"machine": "triage", "answer": "real", "confidence": 0.9, "reason": "it looks real"}
-        assert all(e["specversion"] == "1.0" and e["id"] and e["time"].endswith("Z") for e in evs)
+        assert all(e["specversion"] == "1.0" and e["id"] and e["time"].endswith("Z") and e["recordedtime"] for e in evs)
+
+        # the causes: each fact a run wrote names the fact that started it, a depth further
+        assert by["tracker.issue.created"]["depth"] == 0 and "causedby" not in by["tracker.issue.created"], "a scheduled run"
+        chain = ["tracker.issue.created", "sizer.issue.sized", "agent.work.done", "triage.real"]
+        for cause, effect in zip(chain, chain[1:], strict=False):
+            assert ids[by[effect]["causedby"]]["type"] == cause and by[effect]["depth"] == by[cause]["depth"] + 1
+        assert by["chat.message.posted"]["causedby"] == by["sizer.issue.sized"]["id"], "orchestra emit in the agent's shell"
+        assert by["watcher.decision.seen"]["causedby"] == by["decision.made"]["id"]
 
         # the metrics
         store = metrics.for_project(project)
@@ -105,16 +129,21 @@ def test_orchestra_run(tmp_path):
         assert store.latest("decisions_seen_total", {"project": "e2e", "machine": "watcher"})[1] == 1.0
         assert store.latest("orchestra_events_total", {"project": "e2e", "type": "triage.real", "source": "triage"})[1] == 1
 
-        # the items' fold
-        item = Items(project, Events.for_project(project)).get("ABC-1")
+        # the views
+        views = Views(project).of("ABC-1")
+        item = views["latest"]
         assert {k: item["fields"][k] for k in ("title", "size", "ok", "text", "answer")} == \
             {"title": "Fix it", "size": 3, "ok": True, "text": "hello all", "answer": "real"}
-        assert item["done"] is False and len(item["events"]) == 9
+        assert item["done"] is False and item["facts"] == 9 and item["behind"] == 0
         assert item["first"] == "2026-01-01T00:00:00.000Z" and item["fields"]["to"] == "In Progress"
+        assert item["by_type"]["tracker.issue.transitioned"] == {"to": "In Progress"}
+        assert views["ticket"]["status"] == "In Progress" and len(views["ticket"]["said"]) == 9 and views["ticket"]["behind"] == 0
+        seen = json.loads(Path(runs.read(project, "worker")[0]["views"]).read_text())
+        assert seen["ticket"]["subject"] == "ABC-1" and "tracker.issue.created" in seen["ticket"]["said"], "the views the agent saw"
 
         # the runs
         done = {p: runs.read(project, p) for p in ("sizer", "worker", "triage")}
-        assert [(r["exit"], r["events"]) for r in done["sizer"]] == [(0, 1)]
+        assert [(r["exit"], r["facts"]) for r in done["sizer"]] == [(0, 1)]
         assert [(r["exit"], r["cost_usd"]) for r in done["worker"]] == [(0, 0.25)]
         assert done["worker"][0]["types"] == ["agent.note.left", "agent.work.done"]
         assert [(r["exit"], r["types"]) for r in done["triage"]] == [(0, ["decision.made", "triage.real"])]
@@ -129,6 +158,6 @@ def test_orchestra_run(tmp_path):
         assert found["worker"]["publishes"] == {"agent.work.done": 1, "agent.note.left": 1, "chat.message.posted": 1}
         assert found["triage"]["publishes"] == {"decision.made": 1, "triage.real": 1}
         assert found["person.tracker.alice"]["command"] is None and found["person.tracker.alice"]["last_seen"]
-        assert "events endpoint http://127.0.0.1:" in out.stdout and not (home / "e2e" / "endpoint.json").exists()
+        assert "facts endpoint http://127.0.0.1:" in out.stdout and not (home / "e2e" / "endpoint.json").exists()
     finally:
         os.environ.pop("ORCHESTRA_HOME", None)

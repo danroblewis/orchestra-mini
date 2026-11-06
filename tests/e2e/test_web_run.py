@@ -1,5 +1,5 @@
 """``orchestra run --web`` end to end: a fake Prometheus store holding a queue and its flows, a
-metrics command and an events command. While it runs, the login link it prints logs in and every
+metrics command and a facts command. While it runs, the login link it prints logs in and every
 page answers; afterwards ``orchestra query model`` prints the model discovered from the store, read
 through ``orchestra-prometheus``."""
 
@@ -62,7 +62,7 @@ def test_run_with_the_pages(tmp_path):
         assert r.status == 303
         cookie = r.getheader("Set-Cookie").split(";")[0]
         bodies = {}
-        for path in ("/", "/items", "/machines", "/dynamics", "/core"):
+        for path in ("/", "/subjects", "/machines", "/dynamics", "/core"):
             c.request("GET", path, headers={"Cookie": cookie})
             r = c.getresponse()
             bodies[path] = r.read().decode()

@@ -1,5 +1,5 @@
 // The two drawings: the model on Dynamics (stocks as boxes, flows as arrows, outside as a cloud at
-// either end) and the event map on Machines (who publishes which type, and who listens for it).
+// either end) and the fact map on Machines (who publishes which type, and who listens for it).
 // Both read the page's embedded JSON (#data); plain SVG, no library.
 (function () {
   const el = document.getElementById("data");

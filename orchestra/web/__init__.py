@@ -1,4 +1,4 @@
-"""The pages (SPEC §7), read only: Dashboard, Items, Machines, Dynamics and Core, behind the
+"""The pages (SPEC §5), read only: Dashboard, Subjects, Machines, Dynamics and Core, behind the
 project's token (``auth``). ``serve(project, stop, listen)`` is the seam ``orchestra run --web``
 uses (``orchestra.hooks``): it prints a login link and serves until ``stop``."""
 

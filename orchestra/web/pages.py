@@ -1,5 +1,5 @@
 """The pages, as HTML: plain markup, one stylesheet, and ``graph.js`` for the two drawings (the
-model on Dynamics, the event map on Machines), which read the page's embedded JSON."""
+model on Dynamics, the fact map on Machines), which read the page's embedded JSON."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 from html import escape
 from urllib.parse import quote
 
-PAGES = [("/", "Dashboard"), ("/items", "Items"), ("/machines", "Machines"), ("/dynamics", "Dynamics"), ("/core", "Core")]
+PAGES = [("/", "Dashboard"), ("/subjects", "Subjects"), ("/machines", "Machines"), ("/dynamics", "Dynamics"), ("/core", "Core")]
 
 
 def e(x) -> str:
@@ -40,25 +40,25 @@ def layout(project, path: str, title: str, body: str, data: dict | None = None) 
 <main><h1>{e(title)}</h1>{body}</main>{embed}<script src="/static/graph.js"></script></body></html>"""
 
 
-def item_link(subject: str) -> str:
-    return f'<a href="/items?show={quote(subject, safe="")}">{e(subject)}</a>'
+def subject_link(subject: str) -> str:
+    return f'<a href="/subjects?show={quote(subject, safe="")}">{e(subject)}</a>'
 
 
 def dashboard(d: dict) -> str:
-    waiting = table(["item", "title", "latest", "when"], [[item_link(i["subject"]), e(i["title"]), e(i["type"]), when(i["last"])]
-                                                           for i in d["waiting"]], "nothing waits on you")
-    opened = table(["item", "latest", "when", "waits on"], [[item_link(i["subject"]), e(i["type"]), when(i["last"]), e(i["waiting_on"])]
-                                                            for i in d["recent_open"]], "no open items")
+    waiting = table(["subject", "title", "latest", "when"], [[subject_link(i["subject"]), e(i["title"]), e(i["type"]), when(i["last"])]
+                                                              for i in d["waiting"]], "nothing waits on you")
+    opened = table(["subject", "latest", "when", "waits on"], [[subject_link(i["subject"]), e(i["type"]), when(i["last"]),
+                                                               e(i["waiting_on"])] for i in d["recent_open"]], "no open subjects")
     spent = ", ".join(f"{e(k)} ${v:.2f}" for k, v in d["spent_by"].items() if v) or "nothing"
     return (f'<section><h2>Waiting on you</h2>{waiting}</section>'
-            f'<section><h2>Open items ({d["open"]})</h2>{opened}<p><a href="/items">all items</a></p></section>'
+            f'<section><h2>Open subjects ({d["open"]})</h2>{opened}<p><a href="/subjects">all subjects</a></p></section>'
             f'<section><h2>Recent runs</h2>{runs_table(d["runs"])}</section>'
             f'<section><h2>Spend today</h2><p class="big">${d["spent_today"]:.2f}</p><p class="quiet">{spent}</p></section>')
 
 
 def runs_table(rs: list[dict]) -> str:
-    return table(["machine", "started", "ended", "exit", "events", "points", "cost", "note"],
-                 [[e(r.get("machine")), when(r.get("start")), when(r.get("end")), e(r.get("exit")), e(r.get("events")),
+    return table(["machine", "started", "ended", "exit", "facts", "points", "cost", "note"],
+                 [[e(r.get("machine")), when(r.get("start")), when(r.get("end")), e(r.get("exit")), e(r.get("facts", r.get("events"))),
                    e(r.get("points") or ""), f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "", e(r.get("note"))]
                   for r in rs], "no runs yet")
 
@@ -68,46 +68,59 @@ def _value(v) -> str:
 
 
 def _kind_table(g: dict, closed: bool) -> str:
-    rows = [[item_link(i["subject"]), e(i["title"])] + [_value(v) for v in i["values"]]
-            + [e(i["type"]), when(i["last"]), e(i["waiting_on"]), "closed" if i["done"] else "open"] for i in g["items"]]
-    return table(["item", "title", *g["columns"], "latest", "when", "waits on", "state"], rows, "none")
+    rows = [[subject_link(i["subject"]), e(i["title"])] + [_value(v) for v in i["values"]]
+            + [e(i["type"]), when(i["last"]), e(i["waiting_on"]), "done" if i["done"] else "open"] for i in g["subjects"]]
+    return table(["subject", "title", *g["columns"], "latest", "when", "waits on", "state"], rows, "none")
 
 
-def items(d: dict) -> str:
+def subjects(d: dict) -> str:
     kind = d.get("kind")
     q = ("&closed=1" if d["closed"] else "") + (f"&kind={quote(kind)}" if kind else "")
-    kinds = " · ".join(['<a href="/items">all</a>' if kind else "<b>all</b>"]
-                       + [(f"<b>{e(k)} ({n})</b>" if k == kind else f'<a href="/items?kind={quote(k)}">{e(k)} ({n})</a>')
+    kinds = " · ".join(['<a href="/subjects">all</a>' if kind else "<b>all</b>"]
+                       + [(f"<b>{e(k)} ({n})</b>" if k == kind else f'<a href="/subjects?kind={quote(k)}">{e(k)} ({n})</a>')
                           for k, n in (d.get("kinds") or {}).items()])
     pages = []
     if d["page"] > 0:
-        pages.append(f'<a href="/items?page={d["page"] - 1}{q}">newer</a>')
+        pages.append(f'<a href="/subjects?page={d["page"] - 1}{q}">newer</a>')
     if (d["page"] + 1) * d["n"] < d["total"]:
-        pages.append(f'<a href="/items?page={d["page"] + 1}{q}">older</a>')
-    base = f"/items?kind={quote(kind)}&" if kind else "/items?"
-    toggle = f'<a href="{base}">hide closed</a>' if d["closed"] else f'<a href="{base}closed=1">show closed</a>'
+        pages.append(f'<a href="/subjects?page={d["page"] + 1}{q}">older</a>')
+    base = f"/subjects?kind={quote(kind)}&" if kind else "/subjects?"
+    toggle = f'<a href="{base}">hide done</a>' if d["closed"] else f'<a href="{base}closed=1">show done</a>'
     closed = "&closed=1" if d["closed"] else ""
+    what = "subjects" if d["closed"] else "open subjects"
     if kind:                                    # one kind: its table, paged
-        g = d["groups"][0] if d["groups"] else {"kind": kind, "total": 0, "columns": [], "items": []}
-        shown = f'{d["page"] * d["n"] + 1 if g["items"] else 0}-{d["page"] * d["n"] + len(g["items"])} of {d["total"]}'
-        body = f'<p>{shown} {"items" if d["closed"] else "open items"} · {toggle}</p>' + _kind_table(g, d["closed"])
+        g = d["groups"][0] if d["groups"] else {"kind": kind, "total": 0, "columns": [], "subjects": []}
+        shown = f'{d["page"] * d["n"] + 1 if g["subjects"] else 0}-{d["page"] * d["n"] + len(g["subjects"])} of {d["total"]}'
+        body = f'<p>{shown} {what} · {toggle}</p>' + _kind_table(g, d["closed"])
     else:                                       # every kind: a table each, the newest of each
-        body = f'<p>{d["total"]} {"items" if d["closed"] else "open items"} · {toggle}</p>' + ("".join(
-            f'<section><h2><a href="/items?kind={quote(g["kind"])}{closed}">{e(g["kind"])}</a> '
-            f'<span class="muted">({g["total"]}{", the newest " + str(len(g["items"])) if g["total"] > len(g["items"]) else ""})</span></h2>'
-            + _kind_table(g, d["closed"]) + "</section>" for g in d["groups"]) or "<p>no items</p>")
+        body = f'<p>{d["total"]} {what} · {toggle}</p>' + ("".join(
+            f'<section><h2><a href="/subjects?kind={quote(g["kind"])}{closed}">{e(g["kind"])}</a> '
+            f'<span class="muted">({g["total"]}{", the newest " + str(len(g["subjects"])) if g["total"] > len(g["subjects"]) else ""})</span></h2>'
+            + _kind_table(g, d["closed"]) + "</section>" for g in d["groups"]) or "<p>no subjects</p>")
         pages = []
     return (f'<p class="kinds">{kinds}</p>' + body
             + f'<p class="pager">{" · ".join(pages)}</p>')
 
 
-def item(i: dict) -> str:
-    fields = table(["field", "value"], [[e(k), f"<code>{e(json.dumps(v))}</code>"] for k, v in sorted(i["fields"].items())], "no fields")
-    hist = table(["when", "type", "source", "data"], [[when(ev.get("time")), e(ev.get("type")), e(ev.get("source")),
-                                                       f"<code>{e(json.dumps(ev.get('data')))}</code>"] for ev in i["events"]])
-    waits = f'<p>waits on <b>{e(i["fields"]["waiting_on"])}</b></p>' if i["fields"].get("waiting_on") else ""
-    return (f'<p><b>{e(i.get("kind") or "")}</b> · {"closed" if i["done"] else "open"} · latest {e(i["type"])} at {when(i["last"])}</p>{waits}'
-            f'<section><h2>Fields</h2>{fields}</section><section><h2>History</h2>{hist}</section><p><a href="/items">all items</a></p>')
+def _view(name: str, v: dict) -> str:
+    bad = f'<p class="bad">{e(v["error"])} (since {when(v.get("error_at"))}; the last good view is shown)</p>' if v.get("error") else ""
+    behind = f'<p class="quiet">{e(v["behind"])} newer facts not built into it yet</p>' if v.get("behind") else ""
+    shown = {k: x for k, x in v.items() if k not in ("error", "error_at", "behind")}
+    return f'<section><h2>{e(name)}</h2>{bad}{behind}<pre>{e(json.dumps(shown, indent=2))}</pre></section>'
+
+
+def subject(s: dict) -> str:
+    base = s["views"].get("latest") or {}
+    hist = table(["when", "type", "source", "data"], [[when(f.get("time")), e(f.get("type")), e(f.get("source")),
+                                                       f"<code>{e(json.dumps(f.get('data')))}</code>"] for f in s["facts"]])
+    waits = f'<p>waits on <b>{e(s["waiting_on"])}</b></p>' if s.get("waiting_on") else ""
+    views = "".join(_view(name, v) for name, v in s["views"].items() if name != "latest")
+    fields = table(["field", "value"], [[e(k), f"<code>{e(json.dumps(v))}</code>"] for k, v in sorted((base.get("fields") or {}).items())],
+                   "no fields")
+    return (f'<p><b>{e(base.get("kind") or "")}</b> · {"done" if s["done"] else "open"} · latest {e(base.get("type"))} '
+            f'at {when(base.get("last"))}</p>{waits}{views}'
+            f'<section><h2>latest</h2>{fields}</section><section><h2>Facts</h2>{hist}</section>'
+            '<p><a href="/subjects">all subjects</a></p>')
 
 
 def machines(d: dict) -> str:
@@ -122,7 +135,7 @@ def machines(d: dict) -> str:
                      f"<code>{e(command)}</code>" if m["command"] else e(command), e(how), pubs, when(m["last_seen"]),
                      e(m["runs"]) if m["command"] else ""])
     runs = "".join(f'<h3>{e(m["name"])}</h3>{runs_table(m["recent_runs"])}' for m in d["machines"] if m.get("recent_runs"))
-    return ('<section><h2>Event map</h2><div id="map" class="graph"></div></section>'
+    return ('<section><h2>Fact map</h2><div id="map" class="graph"></div></section>'
             + "<section><h2>Machines</h2>" + table(["machine", "command", "runs when", "publishes", "last heard", "runs"], rows,
                                                    "no machines yet: none configured and nothing on the bus") + "</section>"
             + f"<section><h2>Runs</h2>{runs or '<p class=quiet>no runs yet</p>'}</section>")

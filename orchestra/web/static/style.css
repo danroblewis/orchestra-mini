@@ -19,3 +19,4 @@ code { font-size: 12px; word-break: break-all; }
 .graph svg { width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .graph text { fill: var(--fg); font-size: 12px; }
 .login { max-width: 360px; margin: 10vh auto; } .login input { width: 100%; padding: 6px; margin: 6px 0 12px; }
+pre { white-space: pre-wrap; overflow-x: auto; font-size: 13px; }
