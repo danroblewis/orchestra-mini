@@ -1,8 +1,9 @@
 # Orchestra
 
-A dumb system: an event bus, a metrics store, machines it runs (programs, AI agents, decisions:
-each reads events as JSON lines on stdin and writes events and metrics as JSON lines on stdout),
-items folded from events, and a system dynamics model guessed from the metrics. The whole design is [SPEC.md](SPEC.md), one page.
+A dumb system: an event bus, a metrics store, machines it runs (commands that read events as JSON
+lines on stdin and write events and metrics as JSON lines on stdout), other stores read through
+adapters, items folded from events, and a system dynamics model guessed from the metrics. The whole
+design is [SPEC.md](SPEC.md).
 
 ## Install
 
@@ -17,28 +18,27 @@ uv tool install --force 'orchestra[sd] @ git+https://github.com/danroblewis/orch
 
 ```bash
 cd <your repository>
-orchestra init         # the state directory, ~/.orchestra/<project>/
-orchestra setup        # a Claude Code session that asks what you want, then writes and tests
-                       # orchestra.yaml, its scripts and its prompts; or: orchestra setup "watch our Jira"
-orchestra run --web    # everything, and the pages; Ctrl-C stops it
-orchestra chat         # talk to the Supervisor: what's happening, and changes; --continue resumes
-orchestra reset        # clear the data and start over (keeps the config); --yes to do it
+orchestra chat         # the Supervisor: with no config it sets the project up (or: orchestra chat "watch our Jira");
+                       # then it answers about what is happening, changes things, clears the data; --continue resumes
+orchestra run --web    # checks the config, runs every machine, serves the pages; Ctrl-C stops it
+orchestra emit '{"type": "deploy.release.done", "subject": "v1.4"}'
+orchestra query items  # also: events, metrics, model, runs, or '<promql>' [--store NAME]
 ```
 
-The config stays short and readable, so you can edit it by hand too: one `machines:` list says
-what runs, on which events (`on:`), on a schedule (`every:`) or kept running (`mode: continuous`).
-Secrets come from environment variables named in the config (`token_env: JIRA_TOKEN`). An agent
-machine runs Claude Code with your own login and environment.
+A machine is four fields, so the config stays readable by hand:
 
-## Read
-
-```bash
-orchestra events -n 20          # the latest events
-orchestra items                 # open items; orchestra items show <subject>
-orchestra runs                  # machine runs
-orchestra metrics               # series in the metrics store
-orchestra model                 # the discovered model
+```yaml
+machines:
+  - name: ci_triage
+    command: orchestra decide "Is this failure caused by the change?" --answers real,flaky
+    on: [github.check.failed]
+  - name: fixer
+    command: orchestra agent .orchestra/prompts/fixer.md --per-day-usd 15
+    on: [ci_triage.real]
 ```
+
+`orchestra agent` and `orchestra decide` are programs that come with Orchestra; any other command
+works the same way. An agent runs Claude Code with your own login and environment.
 
 ## Develop
 
