@@ -28,6 +28,21 @@ A lock or a central scheduler fixes some of these by making agents wait for each
 throws away the reason for having fifty of them. The question is whether something outside the
 agents can make concurrent work merge correctly without making them wait.
 
+### What already works, for code
+
+For code, practitioners already handle most of this without any new layer: one worktree and branch
+per agent; a planner that splits work so tasks touch different files; an orchestrator that assigns
+each task to one agent; a reviewer; a merge queue that runs CI on the rebased change. Stale context
+is a rebase and CI, lost updates are git's job, duplicate work is the assignment, unvalidated writes
+are CI, attribution is commits, undo is a revert. This document does not propose replacing that.
+
+What it is about is the rest: the shared records that are not code and have several writers at
+once (an incident's findings, timeline and status during an outage; a ticket's fields while a
+triage agent, a fixer and a person all touch it; a document several agents draft together; the
+claims on jobs), and the facts about the work itself, which the git workflow does not record at
+all. How often several writers really touch one record at once is not yet measured; it is the
+first thing to measure before building more than section 10's first steps.
+
 ## 2. The key observation: long-running agents are disconnected replicas
 
 CRDTs exist for replicas that edit the same data while disconnected, then sync, and must agree
@@ -78,7 +93,12 @@ offline, with one set of types serving both.
 
 Asking agents to emit facts themselves (a `rename_function` tool instead of Edit, a
 `report_work` call at the end of each turn) puts the burden on the one participant least reliable
-at formal output. Agents should work the way they already work. The facts are derived, at two
+at formal output, and the lab measured it. Forced (only semantic tools and one reporting tool
+available), agents used them every time. Given optional `record_*` fact tools beside Edit and Bash
+(provisional figures, strategy F): unprompted, 0 calls in 8 tasks; told once to record, calls in 7
+of 8 tasks, covering 10 of the 26 changes the detector found; told to record after every change,
+calls in 5 of 8, covering 8 of 26. An agent records some of its work when asked, never all of it.
+Agents should work the way they already work. The facts are derived, at two
 levels:
 
 - **Evidence: the session log, kept beside the event log, not in it.** Session entries are
@@ -100,14 +120,18 @@ levels:
   fact. It becomes a domain fact only when it is checked (and, for a branch, at merge), submitted as
   a command the subject's home accepts or rejects. The named fact points back to its evidence:
 
-  Measured (`~/agent-facts-lab`, eight small coding tasks, Claude Code on Sonnet, $1.18 in all): the
+  Measured (`~/agent-facts-lab`: eight small tasks on a toy Python module, one run each, one model,
+  and the same author wrote the expected facts and the detector, so read these as a feasibility
+  check, not a benchmark; Claude Code on Sonnet, $1.18 in all): the
   detector over harness diffs recorded every catalogued change fact (precision and recall 1.00 on
   seven tasks, 0.88/0.75 on the mixed one), including edits the agent made with `sed`. Haiku
   classifying session windows alone was much worse (recall 0 to 0.75 by function; 13 of 14 change
   facts by file, 1 of 8 work facts): an Edit window has no line context, so the function is lost, and
-  one window cannot show "failed before". Its real value was naming a fact the catalogue lacked
-  (`parameter_renamed`, from the agent's own words) and the reasoning to attach. So the classifier
-  is given the detector's facts and the window together, and is never the only source.
+  one window cannot show "failed before". Once it named a fact the catalogue lacked
+  (`parameter_renamed`, from the agent's own words); whether it reliably adds the *why* is untested,
+  as is whether a real classification model (rather than a language model asked to pick a label)
+  does better. So the classifier is given the detector's facts and the window together, and is
+  never the only source.
 
 ```jsonl
 {"type": "classification.recorded", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["evidence:sha256:41e0…", "evidence:sha256:42b9…"], "data": {"label": "code.function_body_changed", "lines_changed": 2}}
@@ -127,8 +151,10 @@ Two rules make derived facts safe in a CRDT:
    rebuilt. Every other fact carries a globally unique id (a UUID, not a local sequence).
 2. **Facts that replay and facts that describe are different.** A `function_renamed` produced by a
    rename tool (or recognised exactly by a syntax-tree diff) can be applied again on top of someone
-   else's change: a rename and a change to the same function's body commute, where text patches
-   conflict. A `test_fixed` derived from a session describes an edit made as text, and git still
+   else's change: in the lab's one hand-built pair, a rename and a change to the same function's
+   body gave the same tree in either order, where the text patches conflicted. Replay depends on
+   semantic tools, which today reformat code a little and lack operations (renaming a parameter,
+   removing a test). A `test_fixed` derived from a session describes an edit made as text, and git still
    merges that text. So for code, derived facts mostly describe, and the merge of the code stays in
    git unless a fact replays. The CRDT's own territory is the shared record that is not code:
    items, claims, findings, statuses, the model.
@@ -282,17 +308,19 @@ fork that reaches main only by a merge.
 
 ## 6. Each coordination problem, solved
 
-**Stale context (1).** A running agent's stdin keeps receiving the facts that touch its item while
-it works ("since what you read: ResponderJoined carol, FindingAdded f2, TimelineEntry x3"). It
-updates its working copy incrementally: deltas, not a re-read. Each delta says where it sits
-causally: a late fact that sorts *before* what the agent read (a `Log` entry inserted into history)
-is different news from one after it, and the agent is told which. Its own late writes still merge,
-because CRDT operations don't depend on being fresh, and where freshness matters the stale-write
-guard turns them into conflicts rather than overwrites. Staleness is detectable without the agent's
-help: its `deps` say what it read, recorded by the harness when the agent reads an item through an
-Orchestra tool rather than inferred from file reads. Whether a model can use a delta that arrives
-in the middle of its reasoning is an open question; the guaranteed part is that its late write
-cannot silently win.
+**Stale context (1).** An agent's loop does not read anything mid-turn, and models anchor on what
+they read first, so pushing every new fact at a running agent is noise at best. Two things work
+instead:
+
+- **The home rejects stale commands at submit.** The agent's `deps` say what it had read; if the
+  subject moved on in a way the conflict table says matters, the command is re-decided or sent back.
+- **A relevance-gated notice, at the agent's next write or submit.** A hook intersects what the agent
+  read and edited (from its session log and the detector's facts) with the facts that landed since
+  its `deps`, and a cheap yes/no classifier asks "does this invalidate the plan?" Only a yes
+  interrupts, and only at that boundary.
+
+`deps` are sound only if the instrumented read is the only way in: an agent that also reads the
+item with `gh` or `curl` has read things no `deps` record.
 
 **Lost updates (2).** There are no whole-object writes, only operations on typed fields. Two
 agents' operations on different fields, different keys, a set or a log never overwrite each other.
@@ -305,10 +333,11 @@ never collide, and the same section becomes a `Choice` conflict someone resolves
 merge. On code, replayable facts (renames, added parameters) rebase onto each other structurally;
 the rest is git's merge, as now.
 
-**Duplicate work (4): advisory claims.** A claim is an operation too: `Map[job, Claim]` where a
-claim has a holder and a lease. Two agents claiming the same job at once resolve deterministically
-(earliest clock wins, ties by id); the loser sees on its stdin that it lost and stops. Merged that
-way, a claim *reduces* duplicate work and cannot prevent it: a CRDT cannot give mutual exclusion,
+**Duplicate work (4).** Claims are taken by the dispatcher before a session starts, not by agents
+mid-run: an agent does not stop because a message says it lost, and a thirty-minute session outlives
+a lease nobody renews, so the harness enforces both (it suspends or stops the session when the claim
+is lost or the lease lapses). Merged as a CRDT (`Map[job, Claim]`, earliest clock wins), a claim
+*reduces* duplicate work and cannot prevent it: a CRDT cannot give mutual exclusion,
 and a claim with an earlier clock that arrives late (a laptop that was offline) takes the job after
 the holder has worked on it. So claims are decided at the job's home: one claim stream per job, the
 first append accepted (it expects the stream not to exist yet), and a lease kept by a process
@@ -348,17 +377,20 @@ entries it came from, so any change traces to the agent's exact turn and reasoni
 run targets exactly the facts caused by its session, by id: remove *its* `Set` tags, not the
 values; drop its `Log` entries and `Map` keys; and for a `Register`, put back the value it displaced
 only if nothing has written since, otherwise raise a conflict. A blind "write the previous value"
-would clobber the fleet's later work; undo by id leaves it intact.
+would clobber the fleet's later work; undo by id leaves it intact. It undoes the record, not the
+world: a pushed branch, a posted comment or a page sent are undone, if at all, by the machine that
+did them, prompted by the facts that say so.
 
-**Context bloat (7).** An agent needs the current state once and deltas after; the facts are small
-because they say only what changed, and they say it by name.
+**Context bloat (7).** Mostly this is the codebase an agent reads, which facts do not shrink. What
+they do shrink is handing work over: the next agent, or a reviewer, gets the previous attempt's
+named facts, their why and the checker's verdicts, not the transcript.
 
 ## 7. Why not the alternatives
 
 | | Shared snapshots (prompts 1 and 2) | Locks or a scheduler | Last write wins per field (with a hybrid clock) | Typed CRDT with named facts |
 |---|---|---|---|---|
 | 50 interleaved writers | overwrite each other | wait for each other | mostly fine; single values silently lost | merge; conflicts on single values kept and shown |
-| Agents 4 minutes stale | their writes are wrong | they held a lock for 4 minutes | a stale write with a fresh clock beats newer work | the stale-write guard makes it a conflict; deltas keep agents current |
+| Agents 4 minutes stale | their writes are wrong | they held a lock for 4 minutes | a stale write with a fresh clock beats newer work | the stale-write guard makes it a conflict; stale commands are rejected at submit |
 | Concurrent edits to collections | lost | serialized | the whole collection replaced | sets, maps and logs merge |
 | Impossible transitions | become truth | caught only if the lock holder checks | become truth | rejected at admission if the writer saw the state; otherwise flagged |
 | Undo one agent's work | restore an old snapshot, losing others' work | same | hard | its facts removed by id |
@@ -369,6 +401,23 @@ Orchestras without a server, so syncing is not what sets the typed version apart
 rest of the table: stale writes made into conflicts instead of wins, collections that merge,
 admission against what the writer saw, and undo by id. Session logs and recorded classifications
 sync the same way, by union.
+
+## 7b. What the facts are for, beyond merging
+
+Most of the value may be in uses that need no merge at all:
+
+- **Scope fences.** A task names the subjects it may touch; a change fact outside them pauses the
+  agent. Deterministic and cheap.
+- **Tripwires on the session log.** Cheap classifiers that spot looping, repeated failing edits, or
+  "done" claimed with no test run, and stop or redirect the agent. Acted on, not recorded as facts.
+- **Fact-assisted rebase.** On a git conflict, replay the agent's replayable facts (renames, added
+  parameters) onto the new main and hand back only the remaining text hunks.
+- **Scheduling.** Predict which symbols a task will touch from similar past tasks' facts, and run
+  overlapping tasks one after another instead of in parallel.
+- **Review.** The reviewer reads the fact chain (named facts, why, checker verdicts) before the
+  diff, and checks the unverified claims first.
+- **Growing the catalogue.** Every `other` and every claim rejected for want of a fact type goes on
+  a queue of proposed new facts.
 
 ## 8. The objection: "if the AI writes the facts, it's writing the system dynamics model, so why estimate?"
 
@@ -447,11 +496,13 @@ facts are the flows, merged facts on main for the system, branch facts for the a
 3. Session logs in an evidence store (per-session keys); harness diffs per tool call; a syntax-tree detector
    for change facts, a checker for work facts, and a classifier for the why and the gaps, each fact
    with `caused_by`.
-4. Delivery of an item's new facts to running processors working on it (deltas on stdin).
+4. Relevance-gated notices to running agents at their next write or submit; deltas on stdin for continuous programs, which can use them.
 5. Branch streams, and classification of the net change at merge.
 6. Claims with leases, as a `Map` type, for work allocation without a scheduler.
 7. The setup brief asks for the model first, then the collector and processors that import it.
 8. Later: syncing between Orchestras (CRDT merge, admission against the causal past, violations as
    a view, triggers only on live appends); undo by id; replayable code facts; `Text`.
 
-Steps 1 to 4 are the coordination core; the rest follows when a real case asks for it.
+Before any of it: measure how often several writers touch one non-code record at once. Steps 1 to
+4 are the coordination core; section 7b's uses need only step 3 and can come first; the rest follows
+when a real case asks for it.
