@@ -1,4 +1,4 @@
-"""The events endpoint (orchestra/endpoint.py): POST /events behind the token, once per id."""
+"""The facts endpoint (orchestra/endpoint.py): POST /events behind the token, once per id, depth 0."""
 
 from __future__ import annotations
 
@@ -36,7 +36,10 @@ def test_post_publishes_once_with_the_token(make_project):
         assert post(url, {"type": "ci.build.finished", "id": "b1"}, tok) == (200, {"id": "b1", "duplicate": True})
         assert post(url, {"subject": "x"}, tok)[0] == 400
         (ev,), _ = events.read(0)
-        assert ev["source"] == "endpoint" and ev["subject"] == "repo#1"
+        assert ev["source"] == "endpoint" and ev["subject"] == "repo#1" and ev["depth"] == 0 and ev["recordedtime"]
+        seen = {"type": "ci.queue.observed", "subject": "q", "data": {"depth": 3}}
+        assert post(url, seen | {"id": "o1"}, tok)[0] == 201
+        assert post(url, seen | {"id": "o2"}, tok) == (200, {"id": "o2", "duplicate": False, "repeat": True})
         with urllib.request.urlopen(url + "/health", timeout=5) as r:
             assert r.status == 200
     finally:

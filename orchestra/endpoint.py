@@ -1,6 +1,6 @@
-"""The events endpoint (SPEC §2): ``POST /events`` with one event as JSON (the same as a stdout
+"""The facts endpoint (SPEC §2): ``POST /events`` with one fact as JSON (the same as a stdout
 line), behind the project's token (``Authorization: Bearer <token>``), published once like any
-other line (source default ``endpoint``); ``GET /health`` without the token. ``orchestra run``
+other line (source default ``endpoint``, depth 0); ``GET /health`` without the token. ``orchestra run``
 serves it on 127.0.0.1 at a port the system picks and records its address in
 ``<state>/endpoint.json``, and prints it and the token when it starts. The token is kept in
 ``<state>/events.token``, readable by its owner only."""
@@ -15,7 +15,7 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .lines import event
+from .lines import PUBLISHED, REPEAT, fact
 
 MAX_BODY = 1_000_000
 
@@ -62,11 +62,13 @@ def handler(publisher, secret: str):
                 raw = json.loads(body)
             except ValueError:
                 return self._send(400, {"error": "not JSON"})
-            ev, why = event(raw, "endpoint", hashlib.sha256(body).hexdigest()[:32]) if isinstance(raw, dict) else (None, "not an object")
+            ev, why = fact(raw, "endpoint", hashlib.sha256(body).hexdigest()[:32]) if isinstance(raw, dict) else (None, "not an object")
             if ev is None:
                 return self._send(400, {"error": why})
-            fresh = publisher.publish(ev)
-            self._send(201 if fresh else 200, {"id": ev["id"], "duplicate": not fresh})
+            ev["depth"] = 0
+            done = publisher.publish(ev)
+            self._send(201 if done == PUBLISHED else 200, {"id": ev["id"], "duplicate": done not in (PUBLISHED, REPEAT),
+                                                           **({"repeat": True} if done == REPEAT else {})})
 
         def log_message(self, *a):
             pass

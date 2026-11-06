@@ -1,4 +1,4 @@
-"""Event lines (orchestra/lines.py): defaults, what is not an event, dedupe by id."""
+"""Fact lines (orchestra/lines.py): defaults, what is not a fact, dedupe by id, repeats skipped."""
 
 from __future__ import annotations
 
@@ -25,18 +25,24 @@ def test_given_fields_are_kept():
     assert (ev["source"], ev["id"], ev["time"], ev["data"]) == ("person.tracker.alice", "x:1", "2026-11-05T08:00:00.000Z", {"k": 1})
 
 
-def test_what_is_not_an_event():
+def test_what_is_not_a_fact():
     assert parse("", "c") == (None, None)
     assert parse("hello", "c") == (None, "not JSON")
     assert parse("{bad", "c") == (None, "not JSON")
     assert parse('{"subject": "x"}', "c") == (None, "no type")
     assert parse('{"type": "a", "time": "yesterday"}', "c")[0] is None
     assert parse('{"type": "a", "subject": 3}', "c") == (None, "subject is not a string")
+    assert parse('{"type": "a", "causedby": 3}', "c") == (None, "causedby is not a string")
 
 
-def publish(pub, line, source="c"):
-    ev, _ = parse(line, source)
-    return pub.publish(ev)
+def test_a_line_may_name_its_cause():
+    ev, _ = parse('{"type": "a.b.c", "causedby": "f1"}', "c")
+    assert ev["causedby"] == "f1" and "depth" not in ev
+
+
+def publish(pub, line, source="c", salt=""):
+    ev, _ = parse(line, source, salt)
+    return pub.publish(ev) == "published"
 
 
 def test_the_publisher_drops_an_id_the_bus_has(tmp_path):
@@ -53,3 +59,17 @@ def test_actor_lines_are_published(tmp_path):
     publish(Publisher(events), '{"type": "orchestra.actor", "source": "person.tracker.alice", "data": {"name": "Alice A"}}', "tracker")
     (ev,), _ = events.read(0)
     assert ev["source"] == "person.tracker.alice" and ev["data"]["name"] == "Alice A"
+
+
+def test_the_publisher_skips_a_repeated_observation_and_stamps_recordedtime(tmp_path):
+    events = Events(tmp_path / "e.jsonl")
+    pub = Publisher(events)
+    seen = '{"type": "jira.issue.observed", "subject": "A-1", "data": {"status": "Open", "n": [1, 2]}}'
+    assert publish(pub, seen, salt="1") and not publish(pub, seen, salt="2"), "same data in another run: a repeat"
+    ev, _ = parse(seen, "c", salt="3")
+    assert Publisher(Events(tmp_path / "e.jsonl")).publish(ev) == "repeat", "another publisher can tell from the bus"
+    assert publish(pub, seen.replace("Open", "Done"), salt="4") and publish(pub, seen, salt="5"), "a return to an earlier state is a change"
+    assert publish(pub, '{"type": "jira.issue.observed", "subject": "A-2", "data": {"status": "Open", "n": [1, 2]}}')
+    told = '{"type": "ci.check.failed", "subject": "A-1", "data": {"k": 1}}'
+    assert publish(pub, told, salt="6") and publish(pub, told, salt="7"), "only observations repeat"
+    assert all(e["recordedtime"].endswith("Z") for e in events.read(0)[0])
