@@ -11,60 +11,29 @@ from dataclasses import dataclass, field
 REQ = {"required": True}
 DUR = {"duration": True}
 LIST = {"names": True}
-KINDS = ("program", "agent", "decision")
-MODES = ("once", "continuous")
-
-
-@dataclass
-class Auth:
-    header: str = "Authorization"
-    token_env: str | None = None
 
 
 @dataclass
 class Store:
     name: str = field(default="", metadata=REQ)
-    url: str = field(default="", metadata=REQ)
+    command: str = field(default="", metadata=REQ)      # the adapter, kept running, asked on stdin (SPEC §4)
     match: str = field(default="", metadata=REQ)
-    token_env: str | None = None
-    auth: Auth | None = None
-    kinds: dict[str, str] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
+    kinds: dict[str, str] = field(default_factory=dict)
     split: list[str] = field(default_factory=list, metadata=LIST)
     rate: str = "1/s"
     per_day: int = 5000
-
-
-@dataclass
-class Tool:
-    name: str = field(default="", metadata=REQ)
-    command: str = field(default="", metadata=REQ)
-    help: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class Machine:
     name: str = field(default="", metadata=REQ)
-    kind: str = "program"
-    mode: str = "once"                   # once: one run per event or per tick; continuous: kept running
-    command: str | None = None           # program: what to run
-    prompt: str | None = None            # agent: the instructions file
-    question: str | None = None          # decision
-    answers: list[str] = field(default_factory=list, metadata=LIST)
-    inputs: list[str] = field(default_factory=list, metadata=LIST)
-    min_confidence: float = 0.6
+    command: str = field(default="", metadata=REQ)
     on: list[str] = field(default_factory=list, metadata=LIST)
     every: float | None = field(default=None, metadata=DUR)
-    tools: list[str] | None = field(default=None, metadata=LIST)   # None: every tool
-    model: str | None = None
-    timeout: float = field(default=1200.0, metadata=DUR)
-    per_day_usd: float = 10.0
-
-
-@dataclass
-class Agent:
-    harness: str = "claude_code"
-    command: str = "claude"
+    continuous: bool = False             # kept running, stdin open; else once: one run per event or tick
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -85,14 +54,12 @@ class Config:
     bus: str = "file"
     metrics_store: str = "file"
     stores: list[Store] = field(default_factory=list)
-    tools: list[Tool] = field(default_factory=list)
     machines: list[Machine] = field(default_factory=list)
-    agent: Agent = field(default_factory=Agent)
     items: list[Reducer] = field(default_factory=list)
     discovery: Discovery = field(default_factory=Discovery)
 
-    def tool(self, name: str) -> Tool | None:
-        return next((t for t in self.tools if t.name == name), None)
-
     def machine(self, name: str) -> Machine | None:
         return next((m for m in self.machines if m.name == name), None)
+
+    def store(self, name: str) -> Store | None:
+        return next((s for s in self.stores if s.name == name), None)

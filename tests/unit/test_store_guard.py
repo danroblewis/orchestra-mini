@@ -82,14 +82,6 @@ def test_the_bucket_lets_a_burst_through_then_paces_at_its_rate():
     assert sum(c.slept) == pytest.approx(1.0)
 
 
-def test_a_429s_wait_holds_every_reader_of_the_source():
-    c = Clock()
-    rl = RateLimit(100, 100, sleep=c.sleep, clock=c)
-    rl.hold(7.0)
-    rl.take()
-    assert sum(c.slept) == pytest.approx(7.0)
-
-
 def test_two_processes_share_one_bucket_through_its_file(tmp_path):
     c = Clock()
     a = RateLimit(1, 2, tmp_path / "s.rate", sleep=c.sleep, clock=c)

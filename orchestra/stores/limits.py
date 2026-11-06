@@ -3,7 +3,7 @@ Copied from the old Orchestra's ``sources/limits.py``, without the per-round bud
 
 A token bucket per store, shared by every thread and, through a small file in the state directory
 (``<state>/stores/<name>.rate``), by every process of the project that reads the store (the runner,
-``orchestra query``, the pages). A 429's ``Retry-After`` holds the bucket for that long (``hold``).
+``orchestra query``, the pages).
 Past ``per_day`` requests in one UTC day, ``DailyCap`` says so and when reads resume."""
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class RateLimit:
         self.path = Path(path) if path else None
         self.per_day = int(per_day) if per_day else None
         self.what = what
-        self._mem = {"tokens": self.burst, "t": clock(), "hold": 0.0, "day": _day(clock()), "count": 0}
+        self._mem = {"tokens": self.burst, "t": clock(), "day": _day(clock()), "count": 0}
         self._lock = threading.Lock()
         self._sleep, self._clock = sleep, clock
 
@@ -52,10 +52,10 @@ class RateLimit:
         try:
             fh.seek(0)
             d = json.loads(fh.read() or "{}")
-            return {"tokens": float(d["tokens"]), "t": float(d["t"]), "hold": float(d.get("hold", 0.0)),
+            return {"tokens": float(d["tokens"]), "t": float(d["t"]),
                     "day": str(d.get("day") or _day(self._clock())), "count": int(d.get("count") or 0)}
         except (ValueError, KeyError, TypeError):
-            return {"tokens": self.burst, "t": self._clock(), "hold": 0.0, "day": _day(self._clock()), "count": 0}
+            return {"tokens": self.burst, "t": self._clock(), "day": _day(self._clock()), "count": 0}
 
     def _with_state(self, fn):
         """``fn(state) -> result`` under the bucket's locks; the state is written back."""
@@ -86,8 +86,6 @@ class RateLimit:
             return -1.0
         st["tokens"] = min(self.burst, st["tokens"] + max(0.0, now - st["t"]) * self.rate)
         st["t"] = now
-        if now < st["hold"]:
-            return st["hold"] - now
         if st["tokens"] >= 1.0 - 1e-6:
             st["tokens"] = max(0.0, st["tokens"] - 1.0)
             st["count"] = st.get("count", 0) + 1
@@ -104,12 +102,6 @@ class RateLimit:
             if wait == 0:
                 return
             self._sleep(min(wait, 5.0))
-
-    def hold(self, seconds: float) -> None:
-        """No request from any reader for ``seconds``: the server asked for that (Retry-After)."""
-        def fn(st):
-            st["hold"] = max(st["hold"], self._clock() + seconds)
-        self._with_state(fn)
 
     def today(self) -> int:
         """Requests given out today (UTC), every process counted."""

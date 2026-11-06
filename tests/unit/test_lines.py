@@ -34,19 +34,22 @@ def test_what_is_not_an_event():
     assert parse('{"type": "a", "subject": 3}', "c") == (None, "subject is not a string")
 
 
+def publish(pub, line, source="c"):
+    ev, _ = parse(line, source)
+    return pub.publish(ev)
+
+
 def test_the_publisher_drops_an_id_the_bus_has(tmp_path):
     events = Events(tmp_path / "e.jsonl")
     a, b = Publisher(events), Publisher(Events(tmp_path / "e.jsonl"))
-    kept_out = []
-    got = a.lines(['{"type": "x.y.z", "id": "1"}\n', "noise\n", '{"type": "x.y.z", "id": "1"}\n'], "c", log=kept_out.append)
-    assert len(got) == 1 and kept_out == ["noise"]
-    assert b.lines(['{"type": "x.y.z", "id": "1"}', '{"type": "x.y.z", "id": "2"}'], "c")[0]["id"] == "2", \
-        "another publisher sees what the first wrote"
+    assert publish(a, '{"type": "x.y.z", "id": "1"}') and not publish(a, '{"type": "x.y.z", "id": "1"}')
+    assert not publish(b, '{"type": "x.y.z", "id": "1"}'), "another publisher sees what the first wrote"
+    assert publish(b, '{"type": "x.y.z", "id": "2"}')
     assert [e["id"] for e in events.read(0)[0]] == ["1", "2"]
 
 
 def test_actor_lines_are_published(tmp_path):
     events = Events(tmp_path / "e.jsonl")
-    Publisher(events).lines(['{"type": "orchestra.actor", "source": "person.tracker.alice", "data": {"name": "Alice A"}}'], "tracker")
+    publish(Publisher(events), '{"type": "orchestra.actor", "source": "person.tracker.alice", "data": {"name": "Alice A"}}', "tracker")
     (ev,), _ = events.read(0)
     assert ev["source"] == "person.tracker.alice" and ev["data"]["name"] == "Alice A"

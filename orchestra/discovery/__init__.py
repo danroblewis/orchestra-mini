@@ -1,10 +1,10 @@
 """Discovery (SPEC §6): the model guessed from the metrics, the seams ``orchestra run`` and
-``orchestra model`` use (``orchestra.hooks``):
+``orchestra query model`` use (``orchestra.hooks``):
 
 - ``start(project, stop)``: a thread that rediscovers every ``discovery.every`` over the last
   ``discovery.window``, writes the latest discovery, saves a version when the structure changed,
   and judges the predictions that are due (``predictions``); it returns at once;
-- ``show(project, args) -> int``: ``orchestra model`` prints the latest discovery (``--json`` for
+- ``show(project, args) -> int``: ``orchestra query model`` prints the latest discovery (``--json`` for
   its JSON, ``--versions`` for the versions, ``--now`` to discover first);
 - ``run_once(project)``: one round, for both.
 
@@ -82,7 +82,7 @@ def show(project, args: list[str]) -> int:
     elif (got := store.latest_discovery()) is not None:
         at, model = got
     else:
-        print("no model yet: orchestra run discovers it every discovery.every, or orchestra model --now")
+        print("no model yet: orchestra run discovers it every discovery.every, or orchestra query model --now")
         return 1
     print(json.dumps(model.to_json(), indent=1) if "--json" in args else text(model, at))
     return 0

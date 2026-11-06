@@ -1,6 +1,6 @@
 """Run records (SPEC §3): one JSON line per machine run in ``<state>/runs/<machine>.jsonl``: its
-id, what started it, start, end, exit code, events published and points written, cost when the
-harness reports it, its log, and a note (why it was not started, why it failed). A file past
+id, what started it, start, end, exit code, events published and points written, cost when it
+says it (a run line), its log, and a note (why it was not started, why it failed). A file past
 ``KEEP`` bytes keeps its newer half, so a collector run every minute never grows it for good."""
 
 from __future__ import annotations

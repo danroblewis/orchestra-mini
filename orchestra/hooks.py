@@ -1,11 +1,9 @@
 """The seams for what is not in the runtime (part 2): a module is used when it is there.
 
 - ``orchestra.discovery``: ``start(project, stop)``, called by ``orchestra run`` (it runs its own
-  thread every ``discovery.every`` and returns); ``show(project, args) -> int``, ``orchestra model``.
+  thread every ``discovery.every`` and returns); ``show(project, args) -> int``, ``orchestra query model``.
 - ``orchestra.web``: ``serve(project, stop, listen)``, called by ``orchestra run --web`` (it blocks
   until ``stop``, in a thread of its own).
-- ``orchestra.stores``: ``query(project, promql, store) -> int``, ``orchestra query --store NAME``;
-  ``check(project, store) -> [(ok, line)]``, ``orchestra check``'s lines for a store.
 """
 
 from __future__ import annotations

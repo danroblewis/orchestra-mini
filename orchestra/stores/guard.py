@@ -8,8 +8,8 @@ take down the prometheus servers"). Copied from the old Orchestra's ``sources/co
   one the match has already and not one that matches everything (``=~".+"``, ``=~".*"``, ``=""``):
   ``{}`` and ``{__name__=~".+"}`` are refused, and so is a match that selects everything.
 - **A bounded window**: no read, range or subquery reaches back more than ``MAX_WINDOW_S``.
-- **A bounded result**: at most ``MAX_SERIES`` series (the reader counts each selector's series
-  with a bounded ``/api/v1/series`` before it runs a query, ``reader.Reader.bounded``)."""
+- **A bounded result**: at most ``MAX_SERIES`` series (the engine counts each selector's series
+  with a ``series`` request before it asks a range, ``engine.Engine.query_range``)."""
 
 from __future__ import annotations
 

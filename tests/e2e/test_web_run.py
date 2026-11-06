@@ -1,6 +1,7 @@
 """``orchestra run --web`` end to end: a fake Prometheus store holding a queue and its flows, a
 metrics command and an events command. While it runs, the login link it prints logs in and every
-page answers; afterwards ``orchestra model`` prints the model discovered from the store."""
+page answers; afterwards ``orchestra query model`` prints the model discovered from the store, read
+through ``orchestra-prometheus``."""
 
 from __future__ import annotations
 
@@ -31,7 +32,8 @@ def test_run_with_the_pages(tmp_path):
     repo.mkdir()
     (repo / "orchestra.yaml").write_text(yaml.safe_dump({
         "project": "webrun",
-        "stores": [{"name": "prom", "url": fake.url, "token_env": "PROM_TOKEN", "match": '{env="prod"}', "rate": "50/s"}],
+        "stores": [{"name": "prom", "command": f"orchestra-prometheus {fake.url} --token-env PROM_TOKEN", "match": '{env="prod"}',
+                    "rate": "50/s"}],
         "machines": [{"name": "local", "command": "scripts/m.py", "every": "1s"},
                      {"name": "feed", "command": "scripts/feed.py", "every": "1s"}],
         "discovery": {"every": "2s", "window": "60m"}}))
@@ -71,7 +73,7 @@ def test_run_with_the_pages(tmp_path):
         proc.kill()
         fake.close()
     assert proc.returncode == 0
-    out = subprocess.run([exe, "model"], cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+    out = subprocess.run([exe, "query", "model"], cwd=repo, env=env, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "model webrun" in out.stdout and "stock queue_depth" in out.stdout, out.stdout
     assert "flow served_total" in out.stdout and "flow arrivals_total" in out.stdout

@@ -4,7 +4,7 @@ Orchestra's ``sd/store.py``, without eras, the declared layer and run records.
 - **Versions** ``v0001.json``, ``v0002.json``, …: the highest is the current model; past versions
   stay readable. Discovery saves one only when the structure changed (``model.structure``).
 - **The latest discovery**, ``discovered.json``, written every round: what the pages and
-  ``orchestra model`` read, so nothing rediscovers on request.
+  ``orchestra query model`` read, so nothing rediscovers on request.
 - **Records** (``predictions.json``): small files beside them, written atomically."""
 
 from __future__ import annotations

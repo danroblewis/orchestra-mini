@@ -2,7 +2,8 @@
 ``kinds`` say (a flow read as a counter, a level as a gauge, ``ignore`` never), one series per value
 of its ``split`` labels (summed over the rest), named by its ``names``.
 
-One listing of the match (at most ``MAX_SERIES`` series), then one range query per metric:
+Through the engine (``engine.py``): one listing of the match (at most ``MAX_SERIES`` series), then
+one range query per metric:
 ``sum by (split) (increase(m[step]))`` for a flow, its increments added up into a running count (so
 a counter's resets are the store's to handle), and ``sum by (split) (m)`` for a level."""
 
@@ -11,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import guard
+from .engine import Engine
 from .kinds import kind_of, name_of
-from .reader import Reader
 
 
 @dataclass
@@ -43,8 +44,8 @@ def running(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
 
 def read(project, store, start: float, end: float, step: float) -> tuple[list[StoreSeries], list[str]]:
     """The store's series over [start, end] at ``step``, and what was left out and why."""
-    reader = Reader(project, store)
-    listed = reader.series(store.match, start, end, guard.MAX_SERIES)
+    reader = Engine(project, store)
+    listed = reader.series(store.match, guard.MAX_SERIES)
     metrics = sorted({ls.get("__name__", "") for ls in listed} - {""})
     out, left = [], []
     for metric in metrics:

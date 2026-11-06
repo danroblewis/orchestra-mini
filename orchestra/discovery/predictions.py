@@ -3,7 +3,7 @@ by when; Orchestra judges it when its time comes and publishes ``orchestra.predi
 
 ``data`` of a prediction (Orchestra's own type, so it reads it):
 
-- ``stock`` or ``flow``: the id in the model (``orchestra model``);
+- ``stock`` or ``flow``: the id in the model (``orchestra query model``);
 - ``expect``: ``up``, ``down`` or ``same``, or ``value``: a number (the level, or the rate per the
   model's time unit), within ``tolerance`` (default 0.1, a share of it);
 - ``by``: when to judge it (RFC 3339), or ``within``: a duration from when it was made (``30m``).

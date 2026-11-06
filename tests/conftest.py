@@ -41,3 +41,15 @@ def script(path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body)
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+@pytest.fixture
+def fake_claude(tmp_path, monkeypatch):
+    """The fake ``claude`` (tests/fakes.py) first on ``PATH``; the folder it writes what it saw to."""
+    from fakes import CLAUDE
+    script(tmp_path / "fakebin" / "claude", CLAUDE)
+    seen = tmp_path / "fake"
+    seen.mkdir()
+    monkeypatch.setenv("PATH", f"{tmp_path / 'fakebin'}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_DIR", str(seen))
+    return seen

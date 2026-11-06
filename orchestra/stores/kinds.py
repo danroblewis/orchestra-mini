@@ -57,9 +57,3 @@ def name_of(names: dict[str, str], metric: str, labels: dict) -> str | None:
     """What a series of ``metric`` with ``labels`` is called by ``names``, or None."""
     k = entry(metric, names)
     return render(names[k], metric, labels) if k is not None else None
-
-
-def check(store) -> list[str]:
-    """What is wrong with a store's ``kinds``: each value one of ``KINDS``."""
-    return [f"stores[{store.name}].kinds.{k}: {v!r} is not one of {', '.join(KINDS)}"
-            for k, v in store.kinds.items() if v not in KINDS]

@@ -2,6 +2,6 @@
 
 from .build import ConfigError, build_config, parse_duration
 from .load import home, layers
-from .schema import Config, Machine, Tool
+from .schema import Config, Machine, Store
 
-__all__ = ["Config", "ConfigError", "Machine", "Tool", "build_config", "home", "layers", "parse_duration"]
+__all__ = ["Config", "ConfigError", "Machine", "Store", "build_config", "home", "layers", "parse_duration"]

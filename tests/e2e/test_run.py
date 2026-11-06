@@ -1,7 +1,7 @@
 """``orchestra run`` end to end: a temp project whose machines are a scheduled collector of events
 (three lines, one twice), a scheduled collector of metrics (Prometheus text and a metric line), a
-program on one of those event types, a continuous program, an agent and a decision run by a fake
-``claude`` on PATH, and a tool the agent calls from its shell. Run for a few seconds, then the
+program on one of those event types, a continuous program, ``orchestra agent`` and ``orchestra
+decide`` run by a fake ``claude`` on PATH, and a script the agent runs from its own shell. Run for a few seconds, then the
 bus, the metrics, the items' fold, the runs and the machines are what they should be."""
 
 from __future__ import annotations
@@ -36,9 +36,10 @@ ev = json.loads(sys.stdin.readline())
 print(json.dumps({"type": "sizer.issue.sized", "subject": ev["subject"], "data": {"size": 3}}))
 """
 NOTIFY = """
-import json, sys
+import json, subprocess, sys
 print("posted", sys.argv[1])
-print(json.dumps({"type": "chat.message.posted", "subject": "ABC-1", "data": {"text": sys.argv[1]}}))
+subprocess.run(["orchestra", "emit", json.dumps({"type": "chat.message.posted", "subject": "ABC-1", "data": {"text": sys.argv[1]}})],
+               check=True)
 """
 WATCHER = """
 import json, sys
@@ -49,15 +50,13 @@ for line in sys.stdin:
 """
 CONFIG = {
     "project": "e2e",
-    "tools": [{"name": "notify", "command": "scripts/notify.py {text}", "help": "Post a message."}],
     "machines": [
         {"name": "tracker", "command": "scripts/feed.py", "every": "1s"},
         {"name": "queues", "command": "scripts/queues.py", "every": "1s"},
         {"name": "sizer", "command": "scripts/sizer.py", "on": "tracker.issue.created"},
-        {"name": "worker", "kind": "agent", "prompt": "prompts/worker.md", "on": "sizer.issue.sized", "tools": ["notify"]},
-        {"name": "triage", "kind": "decision", "question": "Is the work real?", "answers": ["real", "noise"],
-         "on": "agent.work.done"},
-        {"name": "watcher", "mode": "continuous", "command": "scripts/watcher.py", "on": "decision.made"},
+        {"name": "worker", "command": "orchestra agent prompts/worker.md --per-day-usd 5", "on": "sizer.issue.sized"},
+        {"name": "triage", "command": 'orchestra decide "Is the work real?" --answers real,noise', "on": "agent.work.done"},
+        {"name": "watcher", "command": "scripts/watcher.py", "continuous": True, "on": "decision.made"},
     ],
 }
 
@@ -73,7 +72,7 @@ def test_orchestra_run(tmp_path):
     script(repo / "scripts" / "sizer.py", SIZER)
     script(repo / "scripts" / "notify.py", NOTIFY)
     script(fakebin / "claude", CLAUDE)
-    env = {**os.environ, "ORCHESTRA_HOME": str(home), "FAKE_DIR": str(tmp_path), "FAKE_TOOL_CALL": "notify text='hello all'",
+    env = {**os.environ, "ORCHESTRA_HOME": str(home), "FAKE_DIR": str(tmp_path), "FAKE_SHELL": "scripts/notify.py 'hello all'",
            "PATH": os.pathsep.join([str(fakebin), str(Path(sys.executable).parent), os.environ["PATH"]])}
     for k in ("ORCHESTRA_REPO", "ORCHESTRA_SOURCE", "ORCHESTRA_MACHINE", "ORCHESTRA_BUS_URL", "ORCHESTRA_METRICS_URL"):
         env.pop(k, None)
@@ -95,7 +94,7 @@ def test_orchestra_run(tmp_path):
             assert types.count(t) == 1, (t, types)
         assert by["tracker.issue.created"]["source"] == "tracker" and by["tracker.issue.transitioned"]["source"] == "person.tracker.alice"
         assert by["sizer.issue.sized"]["source"] == "sizer" and by["agent.work.done"]["source"] == "worker"
-        assert by["chat.message.posted"]["source"] == "worker", "a tool called from the agent's shell publishes as the agent"
+        assert by["chat.message.posted"]["source"] == "worker", "a script run from the agent's shell emits as the agent"
         assert by["decision.made"]["data"] == {"machine": "triage", "answer": "real", "confidence": 0.9, "reason": "it looks real"}
         assert all(e["specversion"] == "1.0" and e["id"] and e["time"].endswith("Z") for e in evs)
 
@@ -120,16 +119,16 @@ def test_orchestra_run(tmp_path):
         assert done["worker"][0]["types"] == ["agent.note.left", "agent.work.done"]
         assert [(r["exit"], r["types"]) for r in done["triage"]] == [(0, ["decision.made", "triage.real"])]
         prompts = [json.loads(p.read_text()) for p in sorted(tmp_path.glob("call-*.json"))]
-        assert len(prompts) == 2 and "notify text=..." in prompts[0]["prompt"] and "Post a message." in prompts[0]["prompt"]
+        assert len(prompts) == 2 and prompts[0]["prompt"].startswith("You do the work.") and "--json-schema" in prompts[1]["argv"]
 
         # the machines
         found = {m["name"]: m for m in machines(project)}
         assert {"sizer", "worker", "triage", "tracker", "watcher", "person.tracker.alice"} <= set(found)
-        assert (found["watcher"]["kind"], found["watcher"]["mode"]) == ("program", "continuous")
+        assert (found["watcher"]["command"], found["watcher"]["continuous"]) == ("scripts/watcher.py", True)
         assert found["sizer"]["listens_for"] == ["tracker.issue.created"] and found["sizer"]["runs"] == 1
         assert found["worker"]["publishes"] == {"agent.work.done": 1, "agent.note.left": 1, "chat.message.posted": 1}
         assert found["triage"]["publishes"] == {"decision.made": 1, "triage.real": 1}
-        assert found["person.tracker.alice"]["kind"] is None and found["person.tracker.alice"]["last_seen"]
+        assert found["person.tracker.alice"]["command"] is None and found["person.tracker.alice"]["last_seen"]
         assert "events endpoint http://127.0.0.1:" in out.stdout and not (home / "e2e" / "endpoint.json").exists()
     finally:
         os.environ.pop("ORCHESTRA_HOME", None)

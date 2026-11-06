@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-NAMED = ("stores", "tools", "machines")
+NAMED = ("stores", "machines")
 
 
 def _named(base: list, over: list) -> list:

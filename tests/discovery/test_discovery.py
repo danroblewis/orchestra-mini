@@ -64,3 +64,31 @@ def test_a_version_is_saved_only_when_the_structure_changes(project, capsys):
 def test_no_model_yet(make_project, capsys):
     p = make_project()
     assert show(p, []) == 1 and "no model yet" in capsys.readouterr().out
+
+
+def test_discovery_reads_a_store_through_its_adapter(make_project, tmp_path, monkeypatch):
+    """The same history, in another store only: the series come through the engine and the fake
+    adapter (tests/fake_adapter.py), within the store's match."""
+    import json
+    import sys
+    from pathlib import Path
+
+    from orchestra.stores import adapter
+    merged: dict = {}
+    for p in history(END):
+        if not p.series.startswith("orchestra_"):
+            merged.setdefault((p.series, tuple(sorted(p.labels.items()))), [p.series, {**p.labels, "env": "prod"}, []])[2].append([p.ts, p.value])
+    (tmp_path / "data.json").write_text(json.dumps(list(merged.values())))
+    monkeypatch.setenv("FAKE_ADAPTER_DATA", str(tmp_path / "data.json"))
+    monkeypatch.setenv("FAKE_ADAPTER_LOG", str(tmp_path / "asked.jsonl"))
+    fake = Path(__file__).resolve().parents[1] / "fake_adapter.py"
+    p = make_project({"discovery": {"window": "60m"}, "stores": [{"name": "far", "command": f"{sys.executable} {fake}",
+                                                                   "match": '{env="prod"}', "rate": "100/s"}]})
+    try:
+        m = run_once(p, now=END)
+    finally:
+        adapter.stop_all()
+    assert [s.series.name for s in m.stocks] == ["queue_depth"] and m.stocks[0].series.source == "far"
+    assert {f.counter.name for f in m.flows} == {"arrivals_total", "served_total"}
+    asked = [json.loads(x) for x in (tmp_path / "asked.jsonl").read_text().splitlines()]
+    assert asked[0] == {"op": "series", "match": '{env="prod"}'} and all(r["op"] in ("series", "range") for r in asked)

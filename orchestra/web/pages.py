@@ -113,16 +113,17 @@ def item(i: dict) -> str:
 def machines(d: dict) -> str:
     rows = []
     for m in d["machines"]:
-        kind = m["kind"] or "observed"           # heard on the bus, not run by Orchestra (a person, another program)
-        how = ", ".join(filter(None, ["continuous" if m.get("mode") == "continuous" else "",
+        command = m["command"] or "observed"     # heard on the bus, not run by Orchestra (a person, another program)
+        how = ", ".join(filter(None, ["continuous" if m.get("continuous") else "",
                                       f"on {', '.join(m['listens_for'])}" if m["listens_for"] else "",
                                       f"every {m['every']:g} s" if m.get("every") else ""]))
         pubs = "<br>".join(f"{e(t)} ×{n}" for t, n in m["publishes"].items())
         rows.append([f'<b>{e(m["name"])}</b>' + (f'<br><span class="quiet">{e(m["label"])}</span>' if m["label"] else ""),
-                     e(kind), e(how), pubs, when(m["last_seen"]), e(m["runs"]) if m["kind"] else ""])
+                     f"<code>{e(command)}</code>" if m["command"] else e(command), e(how), pubs, when(m["last_seen"]),
+                     e(m["runs"]) if m["command"] else ""])
     runs = "".join(f'<h3>{e(m["name"])}</h3>{runs_table(m["recent_runs"])}' for m in d["machines"] if m.get("recent_runs"))
     return ('<section><h2>Event map</h2><div id="map" class="graph"></div></section>'
-            + "<section><h2>Machines</h2>" + table(["machine", "kind", "runs when", "publishes", "last heard", "runs"], rows,
+            + "<section><h2>Machines</h2>" + table(["machine", "command", "runs when", "publishes", "last heard", "runs"], rows,
                                                    "no machines yet: none configured and nothing on the bus") + "</section>"
             + f"<section><h2>Runs</h2>{runs or '<p class=quiet>no runs yet</p>'}</section>")
 

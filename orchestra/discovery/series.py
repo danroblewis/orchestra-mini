@@ -17,7 +17,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, field
 from itertools import pairwise
 
-from .. import hooks, metrics
+from .. import metrics
 from ..output import declared_kinds
 from ..stores.kinds import kind_of
 
@@ -107,7 +107,8 @@ def gather(project, start: float, end: float, step: float) -> tuple[list[Series]
             continue
         ser.values = sample(pts, start, step, n, 0.0 if name == EVENTS else None)
         out.append(ser)
-    if project.config.stores and (stores := hooks.hook("stores", "read")) is not None:
+    if project.config.stores:
+        from .. import stores
         for s in project.config.stores:
             try:
                 got, why = stores.read(project, s, start, end, step)

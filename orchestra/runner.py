@@ -22,7 +22,7 @@ from datetime import datetime
 from . import command, hooks, metrics
 from .continuous import Continuous
 from .counts import EventCollector, backfill, collapse
-from .endpoint import serve
+from .endpoint import serve, token
 from .events import Events
 from .items import Items
 from .lines import Publisher
@@ -44,11 +44,11 @@ class Runner:
         self.publisher = Publisher(self.events)
         self.store = metrics.for_project(project)
         self.items = Items(project, self.events)
-        once = [m for m in self.cfg.machines if m.mode == "once"]
+        once = [m for m in self.cfg.machines if not m.continuous]
         self.queues = {m.name: queue.Queue() for m in once}
         self.ticking: set[str] = set()                     # once machines whose tick's run waits or runs
         self.live = {m.name: Continuous(project, m, self.publisher, self.store, self.stop, self.say)
-                     for m in self.cfg.machines if m.mode == "continuous"}
+                     for m in self.cfg.machines if m.continuous}
         self.threads: list[threading.Thread] = []
         self.endpoint: str | None = None
 
@@ -71,7 +71,7 @@ class Runner:
 
     def _schedule(self) -> None:
         due: dict[str, float] = {}
-        timed = [m for m in self.cfg.machines if m.mode == "once" and m.every]
+        timed = [m for m in self.cfg.machines if not m.continuous and m.every]
         while not self.stop.is_set():
             t = time.monotonic()
             for m in timed:
@@ -110,10 +110,10 @@ class Runner:
         for ev in evs:
             for m in self.cfg.machines:
                 if listens(m, ev):
-                    if m.mode == "once":
-                        self.queues[m.name].put(ev)
+                    if m.continuous:
+                        self.live[m.name].deliver(ev)
                     else:
-                        self.live[m.name].deliver(ev, self._item(ev))
+                        self.queues[m.name].put(ev)
 
     def _item(self, ev: dict | None) -> dict | None:
         return self.items.items.get(ev.get("subject")) if ev and ev.get("subject") else None
@@ -130,7 +130,7 @@ class Runner:
             finally:
                 if ev is None:
                     self.ticking.discard(machine.name)
-            if ev is None and machine.kind == "program" and rec.get("exit") == 0 and not rec.get("note"):
+            if ev is None and rec.get("exit") == 0 and not rec.get("note") and not rec.get("cost_usd"):
                 continue                                    # a quiet collector: its runs say it
             self.say(f"{machine.name}: run {rec['id']} exit {rec.get('exit')}, {rec.get('events', 0)} events"
                      + (f", {rec['points']} points" if rec.get("points") else "")
@@ -139,11 +139,13 @@ class Runner:
 
     def start(self) -> None:
         self.endpoint = serve(self.project, self.publisher, self.stop)
-        self.say(f"orchestra {self.project.name}: events endpoint {self.endpoint}")
+        self.say(f"orchestra {self.project.name}: events endpoint {self.endpoint}/events")
+        if not self.quiet:                                  # the token on the terminal, never in the log
+            print(f"  POST one event as JSON with: Authorization: Bearer {token(self.project)}", flush=True)
         self._thread(self._follow)
         self._thread(self._schedule)
         for m in self.cfg.machines:
-            if m.mode == "continuous":
+            if m.continuous:
                 self._thread(self.live[m.name].keep_running)
             else:
                 self._thread(self._work, m)

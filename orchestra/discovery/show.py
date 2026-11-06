@@ -1,4 +1,4 @@
-"""The model as ``orchestra model`` prints it: each stock with its balance, each flow with its ends,
+"""The model as ``orchestra query model`` prints it: each stock with its balance, each flow with its ends,
 its equation and the machines that may move it."""
 
 from __future__ import annotations
@@ -34,5 +34,5 @@ def text(model: Model, at: float) -> str:
             lines.append(f"    {f.evidence['machines'].get('why')}")
     if errors := d.get("store_errors"):
         lines += [f"store {k}: {v}" for k, v in errors.items()]
-    lines.append(f"left out: {len(d.get('left_out') or {})} series (orchestra model --json says why)")
+    lines.append(f"left out: {len(d.get('left_out') or {})} series (orchestra query model --json says why)")
     return "\n".join(lines)

@@ -2,7 +2,7 @@
 line), behind the project's token (``Authorization: Bearer <token>``), published once like any
 other line (source default ``endpoint``); ``GET /health`` without the token. ``orchestra run``
 serves it on 127.0.0.1 at a port the system picks and records its address in
-``<state>/endpoint.json``; ``orchestra endpoint`` prints both. The token is kept in
+``<state>/endpoint.json``, and prints it and the token when it starts. The token is kept in
 ``<state>/events.token``, readable by its owner only."""
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def handler(publisher, secret: str):
             if self.path != "/events":
                 return self._send(404, {"error": "not found"})
             if not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {secret}"):
-                return self._send(401, {"error": "Authorization: Bearer <token> (orchestra endpoint)"})
+                return self._send(401, {"error": "Authorization: Bearer <token> (orchestra run prints it)"})
             n = int(self.headers.get("Content-Length") or 0)
             if n > MAX_BODY:
                 return self._send(413, {"error": f"at most {MAX_BODY} bytes"})

@@ -7,7 +7,7 @@ import fnmatch
 import threading
 import time
 
-from .. import hooks, metrics, runs
+from .. import metrics, runs
 from ..check import failed, how
 from ..events import Events
 from ..items import Items
@@ -88,13 +88,13 @@ def item(project, subject: str) -> dict | None:
 
 def quiet(r: dict) -> bool:
     """A collector's scheduled run that went well: its runs say it, the dashboard doesn't."""
-    return r.get("kind") == "program" and not r.get("event") and not r.get("events") and not failed(r)
+    return not r.get("event") and not r.get("continuous") and not r.get("events") and not r.get("cost_usd") and not failed(r)
 
 
 def dashboard(project) -> dict:
     found = Items(project, Events.for_project(project)).list()
     owner = [i for i in found if (i.get("fields") or {}).get("waiting_on") == "owner"]
-    spent = {m.name: runs.spent_today(project, m.name) for m in project.config.machines if m.kind != "program"}
+    spent = {m.name: x for m in project.config.machines if (x := runs.spent_today(project, m.name))}
     return {"waiting": [{"subject": i["subject"], "type": i["type"], "last": i["last"],
                          "title": (i.get("fields") or {}).get("title")} for i in owner],
             "open": len(found), "recent_open": [{"subject": i["subject"], "type": i["type"], "last": i["last"],
@@ -113,7 +113,7 @@ def machines(project) -> dict:
             for t in [t for t in types if fnmatch.fnmatchcase(t, pat)] or [pat]:
                 edges.append({"type": t, "to": m["name"]})
     for m in found:
-        if m["kind"]:
+        if m["command"]:
             m["recent_runs"] = runs.read(project, m["name"], 5)
     return {"machines": found, "edges": edges}
 
@@ -141,10 +141,10 @@ def core(project) -> dict:
     for name, fn in (("bus", bus), ("metrics store", store)):
         said, err = probe(fn)
         out["parts"].append({"part": name, "ok": err is None, "said": said or err, "errors": []})
-    checker = hooks.hook("stores", "check")
+    from .. import stores
+    from ..stores import reqlog
     for s in project.config.stores:
-        lines, err = probe(checker.check, project, s) if checker else ([(True, "configured (reading stores is not installed)")], None)
-        from ..stores import reqlog
+        lines, err = probe(stores.check, project, s)
         errors = [f"{time.strftime('%H:%M:%S', time.localtime(x['t']))} {x['error']}" for x in reqlog.last(project, s.name, 50) if x.get("error")]
         out["parts"].append({"part": f"store {s.name}", "ok": err is None and all(ok for ok, _ in lines or []),
                              "said": err or "; ".join(line for _, line in lines or []), "errors": errors[-5:]})

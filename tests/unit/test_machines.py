@@ -10,7 +10,7 @@ from orchestra.machines import machines
 def test_configured_machines_and_sources(make_project):
     project = make_project({"machines": [{"name": "worker", "command": "x", "on": ["a.b.c"]},
                                          {"name": "idle", "command": "y", "every": "1h"},
-                                         {"name": "tail", "command": "z", "mode": "continuous"}]})
+                                         {"name": "tail", "command": "z", "continuous": True}]})
     events = Events.for_project(project)
     events.publish("orchestra.actor", {"name": "Alice A"}, source="person.tracker.alice")
     events.publish("tracker.issue.moved", source="person.tracker.alice", time="2026-11-05T10:00:00Z")
@@ -20,8 +20,8 @@ def test_configured_machines_and_sources(make_project):
     found = {m["name"]: m for m in machines(project)}
     assert list(found) == ["idle", "tail", "worker", "person.tracker.alice"]
     w, a = found["worker"], found["person.tracker.alice"]
-    assert (w["kind"], w["mode"], w["listens_for"], w["publishes"], w["runs"]) == ("program", "once", ["a.b.c"], {"work.done": 1}, 1)
-    assert found["tail"]["mode"] == "continuous"
-    assert (a["kind"], a["label"], a["publishes"], a["last_seen"]) == (None, "Alice A", {"tracker.issue.moved": 2},
+    assert (w["command"], w["continuous"], w["listens_for"], w["publishes"], w["runs"]) == ("x", False, ["a.b.c"], {"work.done": 1}, 1)
+    assert found["tail"]["continuous"] is True
+    assert (a["command"], a["label"], a["publishes"], a["last_seen"]) == (None, "Alice A", {"tracker.issue.moved": 2},
                                                                           "2026-11-05T11:00:00.000Z")
     assert found["idle"]["every"] == 3600 and found["idle"]["last_seen"] is None

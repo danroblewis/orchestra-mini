@@ -1,4 +1,5 @@
-"""The ``orchestra`` command (SPEC §7)."""
+"""The ``orchestra`` command (SPEC §5): four commands, ``run``, ``chat``, ``emit`` and ``query``,
+and the built-in programs a machine's ``command`` names, ``agent`` and ``decide``."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 from . import __version__, hooks, metrics, runs
 from .config import ConfigError
@@ -16,87 +18,28 @@ from .items import Items
 from .lines import Publisher, event
 from .project import load, repo_root
 
-
-def _project(args):
-    return load(args.repo)
-
-
-def cmd_init(args) -> int:
-    root = args.repo or repo_root()
-    if args.config:
-        path = root / "orchestra.yaml"
-        if path.exists():
-            print(f"{path} exists")
-        else:
-            path.write_text("# Orchestra's config: see SPEC.md §1.\n")
-            print(f"wrote {path}")
-    project = load(root)
-    project.state_dir.mkdir(parents=True, exist_ok=True)
-    print(f"state directory {project.state_dir}")
-    return 0
-
-
-# Orchestra's own data, the only things reset removes. Anything else in the state directory (the
-# overlay, scripts and prompts kept beside it, a cursor a script keeps) is the owner's and is never
-# touched (the owner, 2026-11-05: an earlier reset removed everything but a keep-list, and with it
-# the scripts the setup agent had put there).
-DATA = ("events.jsonl", "metrics.jsonl", "items.json", "cursor.json", "kinds.json", "endpoint.json", "web.json",
-        "model", "runs", "logs", "stores")
-
-
-def cmd_reset(args) -> int:
-    """Clear the project's data (the bus, metrics, items, runs, logs, the model), keeping its
-    config overlay and tokens. Refused while ``orchestra run`` runs."""
-    import shutil
-    project = _project(args)
-    state = project.state_dir
-    try:
-        pid = json.loads((state / "endpoint.json").read_text()).get("pid")
-        if pid:
-            os.kill(int(pid), 0)
-            print(f"orchestra run is running (pid {pid}): stop it first", file=sys.stderr)
-            return 1
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, TypeError):
-        pass
-    gone = sorted(p for p in (state / name for name in DATA) if p.exists()) if state.exists() else []
-    if not gone:
-        print("nothing to clear")
-        return 0
-    if not args.yes:
-        print("this removes, in " + str(state) + ":\n  " + "\n  ".join(p.name for p in gone)
-              + "\nrun again with --yes to clear it")
-        return 1
-    for p in gone:
-        shutil.rmtree(p) if p.is_dir() else p.unlink()
-    print(f"cleared Orchestra's data in {state}; nothing else there was touched. "
-          "Your scripts' own cursors still remember what they relayed.")
-    return 0
-
-
-def cmd_chat(args) -> int:
-    """The Supervisor: Claude Code briefed with the spec, the setup and what is happening now."""
-    args.brief = "chat.md"
-    return cmd_setup(args)
-
-
-def cmd_setup(args) -> int:
-    """Works on a broken config too: fixing it is part of the job."""
-    from . import setup
-    from .config import Config
-    from .project import Project, repo_root
-    try:
-        project = _project(args)
-    except ConfigError as e:
-        root = args.repo or repo_root()
-        project = Project(root.name, root, Config(), [])
-        print(f"orchestra setup: the config does not load yet ({e}); the setup agent will fix it", file=sys.stderr)
-    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt,
-                     brief=getattr(args, "brief", "setup.md"), resume=args.resume)
+PROGRAMS = """programs for machines (named in a machine's command):
+  orchestra agent <prompt file> [--model M] [--per-day-usd N]
+      one Claude Code turn per event; a continuous machine's agent keeps one session
+  orchestra decide "<question>" --answers a,b,c [--inputs f,g] [--min-confidence 0.6] [--model M]
+      one answer per event: publishes decision.made and <machine>.<answer>"""
 
 
 def cmd_run(args) -> int:
+    from .check import problems
     from .runner import Runner
-    project = _project(args)
+    try:
+        project = load(args.repo)
+    except ConfigError as e:
+        print(f"config: {e}\nnot started: fix it, or ask orchestra chat to", file=sys.stderr)
+        return 1
+    project.state_dir.mkdir(parents=True, exist_ok=True)
+    found = problems(project)
+    for level, text in found:
+        print(f"{level}: {text}", file=sys.stderr)
+    if any(level == "error" for level, _ in found):
+        print("not started: fix the errors above, or ask orchestra chat to", file=sys.stderr)
+        return 1
     runner = Runner(project)
     if args.web:
         web = hooks.hook("web", "serve")
@@ -108,28 +51,21 @@ def cmd_run(args) -> int:
     return 0
 
 
-def cmd_check(args) -> int:
-    from .check import lines
+def cmd_chat(args) -> int:
+    """The Supervisor; with no config yet, or one that doesn't load, briefed to set the project up."""
+    from . import setup
+    from .config import Config
+    from .project import Project
+    brief = "chat.md"
     try:
-        project = _project(args)
+        project = load(args.repo)
+        if not project.files:
+            brief = "setup.md"
     except ConfigError as e:
-        print(f"config: {e}")
-        return 1
-    print(f"config: ok ({', '.join(map(str, project.files)) or 'no file: every default'})")
-    bad = 0
-    for ok, text in lines(project):
-        print(("ok    " if ok else "FAIL  ") + text)
-        bad += not ok
-    return 1 if bad else 0
-
-
-def cmd_events(args) -> int:
-    ev = Events.for_project(_project(args))
-    found = [e for e in ev.all(0) if (not args.type or e.get("type") == args.type)
-             and (not args.subject or e.get("subject") == args.subject)]
-    for e in found[-args.n:]:
-        print(json.dumps(e))
-    return 0
+        root = (args.repo or repo_root()).resolve()
+        project, brief = Project(root.name, root, Config(), []), "setup.md"
+        print(f"orchestra chat: the config does not load yet ({e}); setting it up", file=sys.stderr)
+    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt, brief=brief, resume=args.resume)
 
 
 def cmd_emit(args) -> int:
@@ -146,7 +82,7 @@ def cmd_emit(args) -> int:
         print("not a JSON object", file=sys.stderr)
         return 2
     source = os.environ.get("ORCHESTRA_SOURCE") or "cli"
-    project = _project(args)
+    project = load(args.repo)
     if "metric" in raw and "value" in raw:
         point, why = metric(raw, os.environ.get("ORCHESTRA_MACHINE") or source, time.time())
         if point is None:
@@ -166,27 +102,81 @@ def cmd_emit(args) -> int:
     return 0
 
 
-def cmd_metrics(args) -> int:
-    project = _project(args)
-    store = metrics.for_project(project)
-    for name, labels, pts in store.recent(args.prefix or "", {"project": project.name}):
+def q_events(project, rest) -> int:
+    a = argparse.ArgumentParser(prog="orchestra query events")
+    a.add_argument("-n", type=int, default=20)
+    a.add_argument("--type")
+    a.add_argument("--subject")
+    o = a.parse_args(rest)
+    found = [e for e in Events.for_project(project).all(0) if (not o.type or e.get("type") == o.type)
+             and (not o.subject or e.get("subject") == o.subject)]
+    for e in found[-o.n:]:
+        print(json.dumps(e))
+    return 0
+
+
+def q_items(project, rest) -> int:
+    a = argparse.ArgumentParser(prog="orchestra query items")
+    a.add_argument("show", nargs="?", choices=["show"])
+    a.add_argument("subject", nargs="?")
+    a.add_argument("--kind", help="only this kind (github.pr, jira.issue)")
+    a.add_argument("--all", action="store_true", help="closed ones too")
+    a.add_argument("-n", type=int, default=20)
+    a.add_argument("--page", type=int, default=0)
+    o = a.parse_args(rest)
+    items = Items(project, Events.for_project(project))
+    if o.show:
+        item = items.get(o.subject or "")
+        if item is None:
+            print(f"no item {o.subject}", file=sys.stderr)
+            return 1
+        print(json.dumps(item, indent=2))
+        return 0
+    for i in items.list(closed=o.all, kind=o.kind)[o.page * o.n:(o.page + 1) * o.n]:
+        f = i.get("fields") or {}
+        print(f"{i['last']}  {i.get('kind') or '?'}  {i['subject']}  {i['type']}" + (f"  {f['title']}" if f.get("title") else "")
+              + ("  done" if i.get("done") else "") + (f"  waits on {f['waiting_on']}" if f.get("waiting_on") else ""))
+    return 0
+
+
+def q_metrics(project, rest) -> int:
+    for name, labels, pts in metrics.for_project(project).recent(rest[0] if rest else "", {"project": project.name}):
         lab = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()) if k != "project")
         print(f"{name}{{{lab}}} {pts[-1][1]:g}")
     return 0
 
 
-def cmd_query(args) -> int:
-    project = _project(args)
-    if args.store:
-        stores = hooks.hook("stores", "query")
-        if stores is None:
-            print("reading stores is not installed", file=sys.stderr)
-            return 2
-        return stores.query(project, args.promql, args.store)
-    store = metrics.for_project(project)
+def q_model(project, rest) -> int:
+    d = hooks.hook("discovery", "show")
+    if d is None:
+        print("discovery is not installed", file=sys.stderr)
+        return 2
+    return d.show(project, rest)
+
+
+def q_runs(project, rest) -> int:
+    a = argparse.ArgumentParser(prog="orchestra query runs")
+    a.add_argument("machine", nargs="?")
+    a.add_argument("-n", type=int, default=20)
+    o = a.parse_args(rest)
+    for r in runs.read(project, o.machine, o.n):
+        print("  ".join(filter(None, [
+            r.get("start"), r.get("machine"), f"exit {r.get('exit')}", f"{r.get('events', 0)} events",
+            f"{r['points']} points" if r.get("points") else "", f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "",
+            f"for {r['subject']}" if r.get("subject") else "", r.get("note")])))
+    return 0
+
+
+def q_promql(project, promql: str, rest) -> int:
+    a = argparse.ArgumentParser(prog="orchestra query '<promql>'")
+    a.add_argument("--store", help="ask this store (through its adapter) instead of the metrics store")
+    o = a.parse_args(rest)
+    if o.store:
+        from . import stores
+        return stores.query(project, promql, o.store)
     end = time.time()
     try:
-        rows = store.query_range(args.promql, end - 3600, end, 60, {"project": project.name})
+        rows = metrics.for_project(project).query_range(promql, end - 3600, end, 60, {"project": project.name})
     except metrics.MetricsError as e:
         print(e, file=sys.stderr)
         return 2
@@ -196,148 +186,53 @@ def cmd_query(args) -> int:
     return 0
 
 
-def cmd_items(args) -> int:
-    project = _project(args)
-    items = Items(project, Events.for_project(project))
-    if args.show:
-        item = items.get(args.show)
-        if item is None:
-            print(f"no item {args.show}", file=sys.stderr)
-            return 1
-        print(json.dumps(item, indent=2))
-        return 0
-    found = items.list(closed=args.all, kind=args.kind)
-    for i in found[args.page * args.n:(args.page + 1) * args.n]:
-        waits = (i.get("fields") or {}).get("waiting_on")
-        title = (i.get("fields") or {}).get("title")
-        print(f"{i['last']}  {i.get('kind') or '?'}  {i['subject']}  {i['type']}" + (f"  {title}" if title else "")
-              + ("  done" if i.get("done") else "")
-              + (f"  waits on {waits}" if waits else ""))
-    return 0
+QUERIES = {"events": q_events, "items": q_items, "metrics": q_metrics, "model": q_model, "runs": q_runs}
 
 
-def cmd_runs(args) -> int:
-    for r in runs.read(_project(args), args.machine, args.n):
-        print("  ".join(filter(None, [
-            r.get("start"), r.get("machine"), r.get("kind"), f"exit {r.get('exit')}", f"{r.get('events', 0)} events",
-            f"{r['points']} points" if r.get("points") else "", f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "",
-            f"for {r['subject']}" if r.get("subject") else "", r.get("note")])))
-    return 0
-
-
-def cmd_tool(args) -> int:
-    from .tools import ToolError, call, help_text, parse_args
-    project = _project(args)
-    tool = project.config.tool(args.name)
-    if tool is None:
-        print(f"no tool {args.name}; tools: {', '.join(t.name for t in project.config.tools) or 'none'}", file=sys.stderr)
-        return 2
-    if "--help" in args.args or "-h" in args.args:
-        print(help_text(tool, project.repo))
-        return 0
-    source = os.environ.get("ORCHESTRA_SOURCE") or tool.name
-    caller = project.config.machine(os.environ.get("ORCHESTRA_MACHINE", ""))
-    if caller and caller.tools is not None and tool.name not in caller.tools:
-        print(f"{caller.name} may not call {tool.name}; its tools: {', '.join(caller.tools) or 'none'}", file=sys.stderr)
-        return 2
-    try:
-        return call(project, tool, parse_args(args.args), Publisher(Events.for_project(project)), source)
-    except ToolError as e:
-        print(f"{tool.name}: {e}", file=sys.stderr)
-        return 2
-
-
-def cmd_endpoint(args) -> int:
-    from .endpoint import recorded, token
-    project = _project(args)
-    rec = recorded(project)
-    if not rec:
-        print("no endpoint: orchestra run serves it", file=sys.stderr)
-        return 1
-    print(f"{rec['url']}/events\nAuthorization: Bearer {token(project)}")
-    return 0
-
-
-def cmd_model(args) -> int:
-    d = hooks.hook("discovery", "show")
-    if d is None:
-        print("discovery is not installed", file=sys.stderr)
-        return 2
-    return d.show(_project(args), args.rest)
+def cmd_query(args) -> int:
+    project = load(args.repo)
+    if args.what in QUERIES:
+        return QUERIES[args.what](project, args.rest)
+    return q_promql(project, args.what, args.rest)
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="orchestra", description="Runs commands, reads their stdout, keeps the bus.")
+    p = argparse.ArgumentParser(prog="orchestra", description="Runs commands, reads their stdout, keeps the bus.",
+                                epilog=PROGRAMS, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=__version__)
-    p.add_argument("--repo", type=lambda s: __import__("pathlib").Path(s), help="the repository (default: found from here)")
-    sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("init", help="make the state directory")
-    s.add_argument("--config", action="store_true", help="and an empty orchestra.yaml")
-    s.set_defaults(fn=cmd_init)
-    s = sub.add_parser("reset", help="clear the data (bus, metrics, items, runs, logs, model), keeping the config")
-    s.add_argument("--yes", action="store_true", help="do it (without it, say what would go)")
-    s.set_defaults(fn=cmd_reset)
-    s = sub.add_parser("setup", help="a Claude Code session that sets this project up: the config, its scripts and prompts")
-    s.add_argument("message", nargs="*", help="what you want, to start with (else it asks)")
-    s.add_argument("--print-prompt", action="store_true", help="print the setup agent's brief and stop")
-    s.add_argument("--continue", dest="resume", action="store_true", help="carry on the last session in this folder")
-    s.set_defaults(fn=cmd_setup)
-    s = sub.add_parser("chat", help="talk to the Supervisor: a Claude Code session that answers about Orchestra and changes it")
-    s.add_argument("message", nargs="*", help="what you want (else it waits for you)")
-    s.add_argument("--print-prompt", action="store_true", help="print the Supervisor's brief and stop")
-    s.add_argument("--continue", dest="resume", action="store_true", help="carry on the last session in this folder")
-    s.set_defaults(fn=cmd_chat)
-    s = sub.add_parser("run", help="run everything")
+    p.add_argument("--repo", type=Path, help="the repository (default: found from here)")
+    sub = p.add_subparsers(dest="cmd", required=True, title="commands", metavar="{run,chat,emit,query}")
+    s = sub.add_parser("run", help="check the config, then run every machine; --web also serves the pages")
     s.add_argument("--web", action="store_true", help="also serve the pages")
     s.add_argument("--listen", default="127.0.0.1:8765", help="where the pages listen")
     s.add_argument("--seconds", type=float, help="stop after this long")
     s.set_defaults(fn=cmd_run)
-    sub.add_parser("check", help="validate the config and say each part's health").set_defaults(fn=cmd_check)
-    s = sub.add_parser("events", help="the latest events")
-    s.add_argument("--type")
-    s.add_argument("--subject")
-    s.add_argument("-n", type=int, default=20)
-    s.set_defaults(fn=cmd_events)
-    s = sub.add_parser("emit", help="publish one event, or write one metric line")
+    s = sub.add_parser("chat", help="the Supervisor: sets Orchestra up, answers about it, changes it, clears its data")
+    s.add_argument("message", nargs="*", help="what you want (else it waits for you)")
+    s.add_argument("--continue", dest="resume", action="store_true", help="carry on the last session in this folder")
+    s.add_argument("--print-prompt", action="store_true", help="print the brief and stop")
+    s.set_defaults(fn=cmd_chat)
+    s = sub.add_parser("emit", help="publish one event, or write one metric line, as ORCHESTRA_SOURCE")
     s.add_argument("json")
     s.set_defaults(fn=cmd_emit)
-    s = sub.add_parser("metrics", help="the series and their latest values")
-    s.add_argument("prefix", nargs="?")
-    s.set_defaults(fn=cmd_metrics)
-    s = sub.add_parser("query", help="PromQL over the metrics store, or a store")
-    s.add_argument("promql")
-    s.add_argument("--store")
-    s.set_defaults(fn=cmd_query)
-    s = sub.add_parser("items", help="open items; items show SUBJECT")
-    s.add_argument("show", nargs="?", help="show")
-    s.add_argument("subject", nargs="?")
-    s.add_argument("--all", action="store_true", help="closed ones too")
-    s.add_argument("--kind", help="only this kind (github.pr, jira.issue)")
-    s.add_argument("-n", type=int, default=20)
-    s.add_argument("--page", type=int, default=0)
-    s.set_defaults(fn=cmd_items)
-    s = sub.add_parser("runs", help="machine runs, newest first")
-    s.add_argument("machine", nargs="?")
-    s.add_argument("-n", type=int, default=20)
-    s.set_defaults(fn=cmd_runs)
-    s = sub.add_parser("tool", help="call a tool: orchestra tool NAME key=value ...", add_help=False)
-    s.add_argument("name")
-    s.add_argument("args", nargs=argparse.REMAINDER)
-    s.set_defaults(fn=cmd_tool)
-    sub.add_parser("endpoint", help="the events endpoint and its token").set_defaults(fn=cmd_endpoint)
-    s = sub.add_parser("model", help="the system dynamics model")
+    s = sub.add_parser("query", help="events | items | metrics | model | runs | '<promql>' [--store NAME]",
+                       description="orchestra query events [-n N] [--type T] [--subject S]\n"
+                                   "orchestra query items [--kind K] [--all] [show SUBJECT]\n"
+                                   "orchestra query metrics [prefix]\norchestra query model\n"
+                                   "orchestra query runs [machine] [-n N]\norchestra query '<promql>' [--store NAME]",
+                       formatter_class=argparse.RawDescriptionHelpFormatter)
+    s.add_argument("what", help="events, items, metrics, model, runs, or a PromQL query")
     s.add_argument("rest", nargs=argparse.REMAINDER)
-    s.set_defaults(fn=cmd_model)
+    s.set_defaults(fn=cmd_query)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] in (["agent"], ["decide"]):           # programs for machines, apart from the four commands
+        from . import agent, decide
+        return (agent if argv[0] == "agent" else decide).main(argv[1:])
     args = parser().parse_args(argv)
-    if args.cmd == "items":
-        if args.show not in (None, "show") or (args.show == "show" and not args.subject):
-            print("orchestra items [show SUBJECT]", file=sys.stderr)
-            return 2
-        args.show = args.subject
     try:
         return args.fn(args)
     except ConfigError as e:

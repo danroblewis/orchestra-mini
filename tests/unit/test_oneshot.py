@@ -1,11 +1,7 @@
-"""A once machine's run (orchestra/oneshot.py): program, agent and decision kinds, and the spend cap."""
+"""A once machine's run (orchestra/oneshot.py): the event on stdin, both line shapes, Prometheus
+text, the machine's env and a run line's cost."""
 
 from __future__ import annotations
-
-import json
-
-from conftest import script
-from fakes import CLAUDE
 
 from orchestra import metrics, runs
 from orchestra.events import Events
@@ -18,20 +14,13 @@ ITEM = {"subject": "T-1", "fields": {"title": "x", "size": 3}, "events": [TRIGGE
 
 
 def setup(make_project, monkeypatch, machine: dict, **scripts):
-    script(make_project.repo / "claude", CLAUDE)
-    monkeypatch.setenv("FAKE_DIR", str(make_project.repo))
-    project = make_project({"agent": {"command": str(make_project.repo / "claude")}, "machines": [machine],
-                            "tools": [{"name": "say", "command": "echo {text}", "help": "Say it."}]}, **scripts)
+    project = make_project({"machines": [machine]}, **scripts)
     events = Events.for_project(project)
     return project, events, Publisher(events)
 
 
 def once(project, pub, event=TRIGGER, item=ITEM):
     return start_run(project, project.config.machines[0], event, item, pub, metrics.for_project(project))
-
-
-def calls(repo):
-    return [json.loads(p.read_text()) for p in sorted(repo.glob("call-*.json"))]
 
 
 def test_a_program_gets_the_event_and_prints_both_line_shapes(make_project, monkeypatch):
@@ -85,42 +74,16 @@ def test_a_failing_prometheus_round_writes_nothing(make_project, monkeypatch):
     assert (rec["exit"], rec["points"]) == (3, 0) and metrics.for_project(project).series("queue") == []
 
 
-def test_an_agent_turn(make_project, monkeypatch):
-    (make_project.repo / "w.md").write_text("You are the worker.")
-    project, events, pub = setup(make_project, monkeypatch, {"name": "w", "kind": "agent", "prompt": "w.md", "on": "t.task.created",
-                                                             "tools": ["say"], "model": "sonnet"})
-    rec = once(project, pub)
-    assert (rec["exit"], rec["cost_usd"], rec["note"]) == (0, 0.25, None)
-    assert sorted(e["type"] for e in events.read(0)[0]) == ["agent.note.left", "agent.work.done"], \
-        "the event said twice (text and result) is published once"
-    (call,) = calls(project.repo)
-    assert call["argv"] == ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--model", "sonnet"]
-    assert call["prompt"].startswith("You are the worker.") and '"id": "e1"' in call["prompt"]
-    assert "orchestra tool say text=..." in call["prompt"] and '"size": 3' in call["prompt"]
-    assert call["machine"] == call["source"] == "w" and json.loads(call["item"])["events"] == 1
-
-
-def test_the_spend_cap_holds_a_process_until_tomorrow(make_project, monkeypatch):
-    (make_project.repo / "w.md").write_text("Work.")
-    monkeypatch.setenv("FAKE_COST", "6")
-    project, events, pub = setup(make_project, monkeypatch, {"name": "w", "kind": "agent", "prompt": "w.md", "on": "x", "per_day_usd": 10})
-    first, second, third = (once(project, pub, item=None) for _ in range(3))
-    assert first["cost_usd"] == second["cost_usd"] == 6.0
-    assert third["skipped"] and "per_day_usd 10" in third["note"] and "tomorrow" in third["note"]
-    assert len(calls(project.repo)) == 2
-
-
-def test_a_decision(make_project, monkeypatch):
-    proc = {"name": "triage", "kind": "decision", "question": "Is this real?", "answers": ["real", "noise"],
-            "inputs": ["title"], "on": "t.task.created"}
-    project, events, pub = setup(make_project, monkeypatch, proc)
-    rec = once(project, pub)
-    assert rec["exit"] == 0 and rec["cost_usd"] == 0.25 and rec["types"] == ["decision.made", "triage.real"]
-    made, named = events.read(0)[0]
-    assert made["data"] == {"machine": "triage", "answer": "real", "confidence": 0.9, "reason": "it looks real"}
-    assert made["subject"] == named["subject"] == "T-1" and made["source"] == "triage"
-    (call,) = calls(project.repo)
-    assert '"title": "x"' in call["prompt"] and '"size"' not in call["prompt"] and "--json-schema" in call["argv"]
-    monkeypatch.setenv("FAKE_CONFIDENCE", "0.3")
-    once(project, pub)
-    assert [e["type"] for e in events.read(0)[0]][2:] == ["decision.made", "triage.unsure"]
+def test_the_machines_env_and_a_run_line(make_project, monkeypatch):
+    project, _, pub = setup(make_project, monkeypatch, {"name": "m", "command": "./m.py", "every": "1m", "env": {"GREETING": "hi"}},
+                            **{"m.py": """
+        import json, os
+        print(json.dumps({"type": "m.said", "data": {"greeting": os.environ["GREETING"], "continuous": os.environ["ORCHESTRA_CONTINUOUS"]}}))
+        print(json.dumps({"cost_usd": 0.1}))
+        print(json.dumps({"cost_usd": 0.15, "note": "a second call"}))
+    """})
+    rec = once(project, pub, None, None)
+    assert (rec["cost_usd"], rec["note"], rec["events"]) == (0.25, "a second call", 1)
+    (ev,), _ = Events.for_project(project).read(0)
+    assert ev["data"] == {"greeting": "hi", "continuous": ""}
+    assert runs.spent_today(project, "m") == 0.25

@@ -111,20 +111,42 @@ def label(entry: Any, i: int) -> str:
     return entry.get("name") if isinstance(entry, dict) and entry.get("name") else str(i)
 
 
-LISTS = {"stores": schema.Store, "tools": schema.Tool, "machines": schema.Machine, "items": schema.Reducer}
-RENAMED = ("processes", "metrics", "events")      # one section now: machines (the owner, 2026-11-05)
+LISTS = {"stores": schema.Store, "machines": schema.Machine, "items": schema.Reducer}
+AGENT = "an agent is a program now: command: orchestra agent <prompt file> [--model M] [--per-day-usd N]"
+DECIDE = 'a decision is a program now: command: orchestra decide "<question>" --answers a,b [--inputs f] [--min-confidence 0.6]'
+GONE = {    # what the config said before 2026-11-05, and what says it now (the owner: a machine has four fields)
+    "processes": "is now machines:", "metrics": "is now machines:", "events": "is now machines:",
+    "tools": "gone: an agent runs commands in its own shell; say what it may do in its prompt file, or in scripts beside it",
+    "agent": "gone: " + AGENT,
+}
+GONE_MACHINE = {
+    "kind": AGENT + "; " + DECIDE, "prompt": AGENT, "model": AGENT, "per_day_usd": AGENT,
+    "question": DECIDE, "answers": DECIDE, "inputs": DECIDE, "min_confidence": DECIDE,
+    "mode": "gone: continuous: true keeps it running; without it a machine runs once per event or tick",
+    "tools": GONE["tools"], "timeout": "gone: a once run is stopped after an hour",
+}
+GONE_STORE = {k: "gone: the adapter's now: command: orchestra-prometheus <url> --token-env NAME" for k in ("url", "token_env", "auth")}
+
+
+def _gone(raw: dict) -> None:
+    for key, why in GONE.items():
+        if key in raw:
+            raise ConfigError(f"{key}: {why} (SPEC §1)")
+    for key, table in (("machines", GONE_MACHINE), ("stores", GONE_STORE)):
+        for i, e in enumerate(raw.get(key) or []):
+            for k, why in table.items():
+                if isinstance(e, dict) and k in e:
+                    raise ConfigError(f"{key}[{label(e, i)}].{k}: {why}")
 
 
 def build_config(raw: dict) -> schema.Config:
     """The config from the merged layers, with each named entry's path given by its name."""
     if not isinstance(raw, dict):
         raise ConfigError(f"the config must be a map, not {raw!r}")
-    for key in RENAMED:
-        if key in raw:
-            raise ConfigError(f"{key}: is now machines: (SPEC §1)")
     for key in LISTS:
         if key in raw and not isinstance(raw[key], list):
             raise ConfigError(f"{key}: expected a list")
+    _gone(raw)
     cfg = build(schema.Config, {k: v for k, v in raw.items() if k not in LISTS})
     for key, c in LISTS.items():
         setattr(cfg, key, [build(c, e, f"{key}[{label(e, i)}]") for i, e in enumerate(raw.get(key) or [])])
@@ -132,36 +154,31 @@ def build_config(raw: dict) -> schema.Config:
     return cfg
 
 
+def _env(at: str, env: dict[str, str]) -> None:
+    for k, v in env.items():
+        if not ENV_NAME.fullmatch(k):
+            raise ConfigError(f"{at}.env.{k}: not an environment variable's name")
+        if SECRET_VALUES.search(v) or CREDENTIAL_URL.match(v):
+            raise ConfigError(f"{at}.env.{k}: looks like a literal secret; leave it in the environment Orchestra runs in")
+
+
 def check(cfg: schema.Config) -> None:
-    """What the types alone don't say: names unique, kinds and modes known, each kind's fields given."""
-    for key in ("stores", "tools", "machines"):
+    """What the types alone don't say: names unique, when each machine runs, a narrow match."""
+    for key in ("stores", "machines"):
         names = [e.name for e in getattr(cfg, key)]
         if dup := sorted({n for n in names if names.count(n) > 1}):
             raise ConfigError(f"{key}: the name {dup[0]!r} is given twice")
-    tools = {t.name for t in cfg.tools}
     for m in cfg.machines:
         at = f"machines[{m.name}]"
-        if m.kind not in schema.KINDS:
-            raise ConfigError(f"{at}.kind: {m.kind!r} is not one of {', '.join(schema.KINDS)}")
-        if m.mode not in schema.MODES:
-            raise ConfigError(f"{at}.mode: {m.mode!r} is not one of {', '.join(schema.MODES)}")
-        if m.kind == "agent" and not m.prompt:
-            raise ConfigError(f"{at}.prompt: an agent needs its prompt file")
-        if m.kind == "program" and not m.command:
-            raise ConfigError(f"{at}.command: a program needs its command")
-        if m.kind == "decision" and (not m.question or not m.answers):
-            raise ConfigError(f"{at}: a decision needs a question and its answers")
-        if m.mode == "continuous" and m.kind == "decision":
-            raise ConfigError(f"{at}.mode: a decision is one answer per event, never continuous")
-        if m.mode == "continuous" and m.every:
+        if m.continuous and m.every:
             raise ConfigError(f"{at}.every: a continuous machine is kept running, never scheduled")
-        if m.mode == "once" and not (m.on or m.every):
-            raise ConfigError(f"{at}: say when it runs: on, every, or mode: continuous")
-        for t in m.tools or []:
-            if t not in tools:
-                raise ConfigError(f"{at}.tools: no tool named {t!r}")
+        if not (m.continuous or m.on or m.every):
+            raise ConfigError(f"{at}: say when it runs: on, every, or continuous: true")
+        _env(at, m.env)
     for s in cfg.stores:
         if re.fullmatch(r"\{\s*(__name__\s*=~\s*[\"']\.[*+][\"']\s*)?\}", s.match.strip()):
             raise ConfigError(f"stores[{s.name}].match: a match-everything selector is refused")
-    if cfg.agent.harness != "claude_code":
-        raise ConfigError(f"agent.harness: {cfg.agent.harness!r} is not here yet; use claude_code")
+        for k, v in s.kinds.items():
+            if v not in ("flow", "level", "ignore"):
+                raise ConfigError(f"stores[{s.name}].kinds.{k}: {v!r} is not one of flow, level, ignore")
+        _env(f"stores[{s.name}]", s.env)

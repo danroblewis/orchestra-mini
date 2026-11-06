@@ -1,4 +1,4 @@
-"""Event lines (SPEC §2): what a command, a process, a tool or the endpoint says, one JSON object
+"""Event lines (SPEC §2): what a machine or the endpoint says, one JSON object
 per line, made into an event with the envelope, and published once.
 
 A line's ``type`` is required; ``source`` defaults to the command's name; ``id`` to a hash of the
@@ -81,17 +81,3 @@ class Publisher:
             self._seen.add(ev["id"])
             self._at += 1
             return True
-
-    def lines(self, text_lines, source: str, salt: str = "", log=None) -> list[dict]:
-        """Publish each event line of ``text_lines``; the others go to ``log`` (a callable).
-        Returns the events published."""
-        out = []
-        for line in text_lines:
-            ev, why = parse(line, source, salt)
-            if ev is None:
-                if why and log:
-                    log(line.rstrip("\n"))
-                continue
-            if self.publish(ev):
-                out.append(ev)
-        return out

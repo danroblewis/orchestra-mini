@@ -1,55 +1,58 @@
-"""``orchestra check`` (SPEC §7): the config validated, then each part's health in one line: the
-bus, the metrics store, each store, each tool (can it start) and each machine (its kind, how it
-runs, whether its command or prompt is there, its last run)."""
+"""What ``orchestra run`` checks before it starts (SPEC §5), beyond the config loading: each
+machine's and each store's command can start (its program is on ``PATH``, Orchestra's own ``bin``
+first, or a file in the repository), each ``orchestra agent``'s prompt file is there and each
+``orchestra decide`` names its answers (errors: ``run`` refuses to start); ``claude`` is on
+``PATH`` when a built-in program needs it, and each store answers (warnings: said, and ``run``
+starts)."""
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
+from pathlib import Path
 
-from . import hooks, metrics, runs
 from .command import argv
-from .events import Events
 
 
-def _runnable(project, cmd: str) -> str | None:
-    """Why the command cannot start, or None."""
+def _which(project, word: str) -> bool:
+    if "/" in word:
+        return (project.repo / word).exists()
+    path = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+    return shutil.which(word, path=path) is not None
+
+
+def _command(project, what: str, cmd: str) -> list[tuple[str, str]]:
     try:
-        first = argv(cmd)[0]
-    except (ValueError, IndexError):
-        return "cannot be split into words"
-    if "/" in first:
-        return None if (project.repo / first).exists() else f"{first} not found"
-    return None if shutil.which(first) else f"{first} not on PATH"
+        words = argv(cmd)
+    except ValueError as e:
+        return [("error", f"{what}: the command cannot be split into words ({e})")]
+    if not words:
+        return [("error", f"{what}: an empty command")]
+    if not _which(project, words[0]):
+        return [("error", f"{what}: {words[0]} not found" + ("" if "/" in words[0] else " on PATH"))]
+    out = []
+    if words[0] == "orchestra" and words[1:2] == ["agent"]:
+        if len(words) < 3 or not (project.repo / words[2]).is_file():
+            out.append(("error", f"{what}: orchestra agent's prompt file {words[2] if len(words) > 2 else '(none)'} not found"))
+    if words[0] == "orchestra" and words[1:2] == ["decide"] and not any(w.startswith("--answers") for w in words):
+        out.append(("error", f"{what}: orchestra decide needs --answers a,b"))
+    if words[0] == "orchestra" and words[1:2] in (["agent"], ["decide"]) and not shutil.which("claude"):
+        out.append(("warn", f"{what}: claude (Claude Code) is not on PATH"))
+    return out
 
 
-def lines(project) -> list[tuple[bool, str]]:
-    out: list[tuple[bool, str]] = []
-    try:
-        ev = Events.for_project(project)
-        out.append((True, f"bus {ev.bus.name}: {ev.end()} events"))
-    except Exception as e:
-        out.append((False, f"bus: {e}"))
-    try:
-        store = metrics.for_project(project)
-        out.append((True, f"metrics store {store.name}: {len(store.series('', {'project': project.name}))} series"))
-    except Exception as e:
-        out.append((False, f"metrics store: {e}"))
-    stores = hooks.hook("stores", "check")
-    for s in project.config.stores:
-        out += stores.check(project, s) if stores else [(True, f"store {s.name}: configured (reading stores is not installed)")]
-    for t in project.config.tools:
-        why = _runnable(project, t.command)
-        out.append((why is None, f"tool {t.name}: {why or 'ok'}"))
+def problems(project, stores: bool = True) -> list[tuple[str, str]]:
+    """(``error`` or ``warn``, what), each machine and store in turn."""
+    out = []
     for m in project.config.machines:
-        if m.kind == "program":
-            why = _runnable(project, m.command)
-        elif m.kind == "agent" and not (project.repo / m.prompt).is_file():
-            why = f"prompt {m.prompt} not found"
-        else:
-            why = None if shutil.which(project.config.agent.command) else f"{project.config.agent.command} not on PATH"
-        r = (runs.read(project, m.name, 1) or [None])[0]
-        state = f"last run {r['start']} exit {r.get('exit')}" + (f": {r['note']}" if r.get("note") else "") if r else "no runs yet"
-        out.append((why is None and not failed(r), f"machine {m.name} ({how(m)}): {why or state}"))
+        out += _command(project, f"machine {m.name}", m.command)
+    for s in project.config.stores:
+        found = _command(project, f"store {s.name}", s.command)
+        out += found
+        if stores and not found:
+            from . import stores as reading
+            out += [("warn", line) for ok, line in reading.check(project, s) if not ok]
     return out
 
 
@@ -59,6 +62,6 @@ def failed(r: dict | None) -> bool:
 
 
 def how(m) -> str:
-    """A machine's kind and when it runs, in a few words: ``program, every 60s``."""
-    when = "continuous" if m.mode == "continuous" else ""
-    return ", ".join(filter(None, [m.kind, when, f"on {', '.join(m.on)}" if m.on else "", f"every {m.every:g}s" if m.every else ""]))
+    """When a machine runs, in a few words: ``every 60s``, ``continuous, on a.b``."""
+    return ", ".join(filter(None, ["continuous" if m.continuous else "", f"on {', '.join(m.on)}" if m.on else "",
+                                   f"every {m.every:g}s" if m.every else ""]))

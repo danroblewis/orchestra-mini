@@ -65,24 +65,3 @@ def last(project, name: str, n: int = 20) -> list[dict]:
         except ValueError:
             pass
     return out
-
-
-def answer_size(data) -> tuple[int | None, int | None]:
-    """(series, points) of an answer."""
-    if isinstance(data, dict) and isinstance(data.get("result"), list):
-        res = data["result"]
-        return len(res), sum(len(r.get("values") or []) + ("value" in r) for r in res if isinstance(r, dict))
-    if isinstance(data, list):
-        return len(data), None
-    return None, None
-
-
-def asked_about(form: dict | None) -> tuple:
-    """(query, window, step) of a request's form."""
-    if not form:
-        return None, None, None
-    def num(v):
-        return float(v) if v is not None else None
-    q = form.get("query") or form.get("match[]")
-    win = [num(form["start"]), num(form.get("end"))] if "start" in form else [num(form["time"])] if "time" in form else None
-    return q, win, num(form.get("step"))

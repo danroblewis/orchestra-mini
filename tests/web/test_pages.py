@@ -24,7 +24,7 @@ NOW = time.time() // 60 * 60
 def site(make_project):
     p = make_project({"machines": [{"name": "worker", "command": "true", "on": "tracker.issue.*"},
                                    {"name": "queues", "command": "true", "every": "1m"}],
-                      "stores": [{"name": "far", "url": "http://127.0.0.1:9", "match": '{env="prod"}'}]})
+                      "stores": [{"name": "far", "command": "orchestra-prometheus http://127.0.0.1:9", "match": '{env="prod"}'}]})
     ev = Events.for_project(p)
     for i in range(30):
         ev.bus.append({"specversion": "1.0", "id": f"e{i}", "type": "tracker.issue.created", "source": "person.tracker.alice",
@@ -33,7 +33,7 @@ def site(make_project):
                    "time": utc_time(NOW - 10), "data": {"waiting_on": "owner"}})
     ev.bus.append({"specversion": "1.0", "id": "c", "type": "tracker.issue.closed", "source": "worker", "subject": "ABC-4",
                    "time": utc_time(NOW - 5)})
-    runs.record(p, {"id": "r1", "machine": "worker", "kind": "program", "start": utc_time(NOW - 20), "end": utc_time(NOW - 19),
+    runs.record(p, {"id": "r1", "machine": "worker", "start": utc_time(NOW - 20), "end": utc_time(NOW - 19),
                     "exit": 0, "events": 1, "cost_usd": 0.5})
     metrics.for_project(p).write(history(NOW))
     run_once(p, now=NOW)

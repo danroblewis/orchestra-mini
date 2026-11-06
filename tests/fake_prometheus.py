@@ -1,6 +1,6 @@
 """A stdlib fake of the Prometheus HTTP query API, evaluating with Orchestra's PromQL subset
 (``orchestra/metrics/promql.py``) over points held in memory. Trimmed from the old Orchestra's
-``tests/sources/fake_prometheus.py``: a required token (bearer, or another header), refusals queued
+``tests/sources/fake_prometheus.py``: an optional URL path prefix, a required token (bearer, or another header), refusals queued
 as a managed store sends them (a 429 or 503 with ``Retry-After``), a per-query series limit (422),
 and a record of every request."""
 
@@ -20,9 +20,9 @@ class TooMany(Exception):
 
 
 class FakePrometheus:
-    def __init__(self, dump=None, *, token: str | None = None, header: str = "Authorization"):
+    def __init__(self, dump=None, *, token: str | None = None, header: str = "Authorization", prefix: str = ""):
         self.dump = list(dump or [])            # (name, labels, [(t, v)])
-        self.token, self.header = token, header
+        self.token, self.header, self.prefix = token, header, prefix
         self.seen: list[tuple[str, dict]] = []  # (path, headers by lower-case name)
         self.asks: list[tuple[str, dict]] = []  # (endpoint, parameters) of every request answered
         self.queries: list[str] = []
@@ -30,7 +30,7 @@ class FakePrometheus:
         self.max_series = 0
         self.requests = 0
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}{prefix}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def close(self) -> None:
@@ -62,6 +62,8 @@ class FakePrometheus:
             self.queries.append(q)
             res = promql.query_range(self.dump, q, at, at, 60)
             return {"resultType": "vector", "result": [{"metric": lab, "value": [at, repr(pts[-1][1])]} for lab, pts in res]}
+        if endpoint == "buildinfo":
+            return {"version": "fake"}
         if endpoint == "series":
             start, end = float(one("start", 0)), float(one("end", time.time()))
             seen = {}
@@ -83,7 +85,9 @@ class FakePrometheus:
                 fake.requests += 1
                 path = urllib.parse.urlsplit(self.path).path
                 fake.seen.append((path, {k.lower(): v for k, v in self.headers.items()}))
-                endpoint = {"/api/v1/query_range": "query_range", "/api/v1/query": "query", "/api/v1/series": "series"}.get(path)
+                path = path[len(fake.prefix):] if fake.prefix and path.startswith(fake.prefix) else path
+                endpoint = {"/api/v1/query_range": "query_range", "/api/v1/query": "query", "/api/v1/series": "series",
+                            "/api/v1/status/buildinfo": "buildinfo"}.get(path)
                 if not fake._authorized(self.headers):
                     return self._send(401, {"status": "error", "error": "unauthorized"})
                 if fake.refuse:

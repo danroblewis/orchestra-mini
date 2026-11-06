@@ -7,7 +7,8 @@ succeeded. Every point is labelled ``machine=<name>`` (a label of that name give
 ``exported_machine``); the store adds ``project``. A point without a time takes the time it was
 read. A series named ``orchestra_*`` is Orchestra's own and refused. A metric line's ``kind``
 (``counter`` or ``gauge``) is kept in ``<state>/kinds.json`` for discovery; without one the name
-says (``_total`` and ``_count`` are counters, the rest gauges)."""
+says (``_total`` and ``_count`` are counters, the rest gauges). A line with ``cost_usd`` is a **run
+line**: what the run (or a continuous machine's turn) cost, with a ``note`` when there is one."""
 
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ class Output:
     """One run's (or one continuous machine's) stdout, read line by line. ``events`` and ``points``
     say what it published and wrote; ``prometheus=False`` reads JSON lines only (an agent's text)."""
 
-    def __init__(self, project, publisher, store, machine: str, salt: str = "", log=None, prometheus: bool = True):
+    def __init__(self, project, publisher, store, machine: str, salt: str = "", log=None, prometheus: bool = True, on_run=None):
         self.project, self.publisher, self.store, self.machine = project, publisher, store, machine
         self.salt, self.log = salt, log or (lambda text: None)
         self.prom: list[str] | None = None if prometheus else []     # None: the first line decides
@@ -96,6 +97,10 @@ class Output:
         self.events: list[dict] = []
         self.points = 0
         self.kinds: dict[str, str] = {}
+        self.cost: float | None = None
+        self.notes: list[str] = []
+        self.skipped = False
+        self.on_run = on_run                    # a continuous machine's turn ends at each run line
 
     def line(self, text: str) -> None:
         s = text.strip()
@@ -105,7 +110,9 @@ class Output:
             raw = json.loads(s) if s.startswith("{") else None
         except ValueError:
             raw = None
-        if isinstance(raw, dict) and "metric" in raw and "value" in raw:
+        if isinstance(raw, dict) and "cost_usd" in raw and "type" not in raw and "metric" not in raw:
+            self.run_line(raw)
+        elif isinstance(raw, dict) and "metric" in raw and "value" in raw:
             p, why = metric(raw, self.machine, time.time())
             if p is None:
                 self.log(f"{s} skipped: {why}")
@@ -128,6 +135,16 @@ class Output:
             self.log(text.rstrip("\n"))
         if self.prom is None:
             self.prom = []                      # the first line was not Prometheus text: JSON lines only
+
+    def run_line(self, raw: dict) -> None:
+        cost = raw.get("cost_usd")
+        cost = float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) and math.isfinite(cost) else 0.0
+        if self.on_run is not None:
+            return self.on_run(cost, raw.get("note"), bool(raw.get("skipped")))
+        self.cost = (self.cost or 0.0) + cost
+        if raw.get("note"):
+            self.notes.append(str(raw["note"]))
+        self.skipped = self.skipped or bool(raw.get("skipped"))
 
     def publish(self, ev: dict) -> None:
         if self.publisher.publish(ev):
