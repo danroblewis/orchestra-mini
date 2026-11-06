@@ -26,9 +26,11 @@ at, and are changed and rebuilt freely. Work in this order.
    words ("which pull requests wait on a review, and since when?"), which systems to watch, and
    where the files should live: in the repository (default: `orchestra.yaml` at the root, scripts,
    projections and prompts under `.orchestra/`) or kept out of it (the overlay in the state
-   directory, with the scripts beside it). One short exchange, then work. The questions choose
-   which sources and which records to collect, never which fields. Write them down; they go in your
-   report.
+   directory, with the scripts beside it). One short exchange, then work. Collect every system the
+   owner names, its history and its current state, even when no question needs it yet: a later
+   question can only be answered from what was collected, and a source with no history can never
+   be collected after the fact. The questions choose which further records to collect, never which
+   fields. Write them down; they go in your report.
 2. **Find what is already set up** before asking for anything: environment variable names (never
    print values), `gh auth status`, CLIs on PATH, config files, the repository's own scripts and
    endpoints (a `/metrics` route, an `npm run` target). Ask only for what you cannot find, and only

@@ -167,8 +167,10 @@ projection join subjects later.
    `done`).
 
 8. **The setup agent designs facts first** (`orchestra/setup/setup.md`):
-   1. Ask the owner for 2 to 4 questions Orchestra must answer, in their words. The questions
-      choose which sources and which records to collect, never which fields.
+   1. Ask the owner for 2 to 4 questions Orchestra must answer, in their words. Collect every
+      system the owner names, history and current state, even when no question needs it yet (a
+      source with no history can't be collected later); the questions choose which further
+      records to collect, never which fields.
    2. For each source, find its change history (Jira's changelog, GitHub's timeline and reviews,
       git's log); prefer history to current state. Write a collector with one fact per change
       record: `id` the source's own id for it (`jira:ABC-123:history:9912`), so rerunning adds
@@ -249,3 +251,30 @@ up-front choice), a minimalist (cut half of what the first four added), an agent
 builder, last good view on failure, envelope stamps, the views a run saw), an analytics engineer
 (source names kept, schema drift, `whole` projections), an implementer (one read function, the
 lock, the counter kept), and a technical editor.
+
+## After the live runs (branch `facts-first`)
+
+The demo (a simulated tracker, code host and CI, two questions asked at setup, four kept back) was
+set up from nothing three times, each run reviewed against the simulator's script. What changed:
+
+- **Repeats still say something.** A changed observation carries `prevseen`, when the old state was
+  last seen, kept across restarts; views from observations are lower bounds, and answers say
+  "unknown before" the first look.
+- **`omitted` and `truncated` are two words:** fields left out on purpose, and a list not read to
+  its end.
+- **The setup agent collects every system the owner names**, records current state beside
+  history, learns a source from its API, and may clear its own trial data before it reports.
+- **One snapshot per build and per routing step.** The builder and the router read the shared log
+  as one snapshot (facts and the offset they are read to), so a fact landing mid-build is built
+  next time, and none is skipped on its way to machines. `query check` compares views built step
+  by step with a whole rebuild, which is how this was caught.
+
+In every run the four kept questions were answered from facts by projections alone, except the CI
+question in run 3, where the source had not been collected (fixed above). Views from history were
+exact against the simulator.
+
+**Next, not yet done:** a projection as a kind of processor whose output is views (replaced by
+key) rather than facts (appended); three processor templates and an "observable code" section in
+`setup.md`, so what the agent writes can move into the target repository as plain code; write
+scripts that print a fact for each write; `orchestra agent` recording a turn's file and git
+changes as facts.

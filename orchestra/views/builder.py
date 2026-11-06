@@ -103,40 +103,41 @@ class Builder:
         ``whole=False`` leaves the whole projections as they are. Each projection's state."""
         with self._lock, locked(self.project):
             self.log.update()
+            facts, at = self.log.since(0)             # one snapshot: facts read later wait for the next build
             out = {}
             for p in projections(self.project):
                 if p.whole and not whole:
                     continue
                 again = rebuild is True or (isinstance(rebuild, set) and p.name in rebuild)
-                out[p.name] = self._one(p, again)
+                out[p.name] = self._one(p, again, facts, at)
             return out
 
-    def _one(self, p: Projection, again: bool) -> dict:
+    def _one(self, p: Projection, again: bool, facts: list[dict], at: int) -> dict:
         state = load(self.project, p.name)
         h = hash_of(self.project, p) if p.command else f"latest:{__version__}"
-        if again or state.get("hash") != h or state.get("built_to", 0) > self.log.at:
+        if again or state.get("hash") != h or state.get("built_to", 0) > at:
             state = state | {"hash": h, "built_to": 0}
             again = True
-        new = [f for f in self.log.after(state["built_to"]) if matches(p, f)]
+        new = [f for f in facts if f["seq"] > state["built_to"] and matches(p, f)]
         if not new and not again:
-            if state["built_to"] != self.log.at and state.get("build") is not None:
-                state["built_to"] = self.log.at
+            if state["built_to"] != at and state.get("build") is not None:
+                state["built_to"] = at
                 save(self.project, state)
             return state
         t0 = time.monotonic()
         if p.whole:
-            errors = self._whole(p, state)
+            errors = self._whole(p, state, facts)
         else:
-            errors = self._subjects(p, state, new, again)
-        state["built_to"] = self.log.at
+            errors = self._subjects(p, state, new, again, facts)
+        state["built_to"] = at
         state["build"] = {"at": now(), "seconds": round(time.monotonic() - t0, 3), "errors": errors[:5],
                           "error": errors[0] if p.whole and errors else None}
         save(self.project, state)
         return state
 
-    def _subjects(self, p: Projection, state: dict, new: list[dict], again: bool) -> list[str]:
+    def _subjects(self, p: Projection, state: dict, new: list[dict], again: bool, facts: list[dict]) -> list[str]:
         views: dict = state["views"]
-        mine = [f for f in self.log.facts if matches(p, f)]
+        mine = [f for f in facts if matches(p, f)]
         if again:
             pending = {f["subject"] for f in mine}
             for gone in set(views) - pending:
@@ -164,8 +165,8 @@ class Builder:
                 errors.append(f"{s}: {why}")
         return errors
 
-    def _whole(self, p: Projection, state: dict) -> list[str]:
-        printed, err = run_projection(self.project, p, [f for f in self.log.facts if matches(p, f)], self.timeout)
+    def _whole(self, p: Projection, state: dict, facts: list[dict]) -> list[str]:
+        printed, err = run_projection(self.project, p, [f for f in facts if matches(p, f)], self.timeout)
         if err is not None:
             state["views"] = {k: kept(v, "key", k, err) for k, v in state["views"].items()}
             return [err]

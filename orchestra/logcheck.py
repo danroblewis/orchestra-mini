@@ -74,7 +74,8 @@ def stepwise(project, p, first: list[dict]) -> list[str]:
     kept = {k: {x: y for x, y in v.items() if x not in META} for k, v in state["views"].items()}
     differ = sorted(k for k in fresh.keys() | kept.keys() if fresh.get(k) != kept.get(k))
     return [f"projection {p.name}: {len(differ)} views built step by step differ from the same views built from the "
-            f"whole log (such as {differ[0]}): it must give each subject's view from that subject's facts alone"] if differ else []
+            f"whole log (such as {differ[0]}): either the projection must give each subject's view from that subject's "
+            "facts alone, or Orchestra built it from too few facts (`orchestra query views --rebuild`, and report it)"] if differ else []
 
 
 def shapes(facts: list[dict]) -> list[str]:

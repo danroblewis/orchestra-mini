@@ -159,3 +159,50 @@ def test_the_views_a_run_saw_are_kept(make_project, monkeypatch):
     item = json.loads(seen.legacy_item({"latest": {"subject": "A", "fields": {}, "by_type": {"x": 1}, "facts": 4}}))
     assert item == {"subject": "A", "fields": {}, "events": 4}
     assert seen.legacy_item({"latest": {"subject": "A", "fields": {"big": "x" * 40_000}}}) == ""
+
+
+def test_a_fact_that_lands_while_a_projection_runs_waits_for_the_next_build(make_project):
+    """The builder works from one snapshot of the log: a fact read by another thread during a
+    build is not marked built, so the next build gives it to the projection."""
+    import threading
+    import time
+
+    from orchestra.events import Events
+    from orchestra.facts import FactLog
+    from orchestra.views.builder import Builder
+    slow = """import json, sys, time
+time.sleep(0.5)
+n = {}
+for line in sys.stdin:
+    f = json.loads(line); n[f["subject"]] = n.get(f["subject"], 0) + 1
+for s, k in n.items():
+    print(json.dumps({"subject": s, "n": k}))
+"""
+    p = make_project({"projections": [{"name": "count", "match": "s/*", "command": "p/count.py"}]}, **{"p/count.py": slow})
+    ev = Events.for_project(p)
+    log = FactLog(ev)
+    b = Builder(p, log=log)
+    ev.publish("x.happened", {"i": 1}, subject="s/1")
+    b.build()
+    ev.publish("x.happened", {"i": 2}, subject="s/1")
+    t = threading.Thread(target=b.build)
+    t.start()
+    time.sleep(0.2)
+    ev.publish("x.happened", {"i": 3}, subject="s/1")      # lands while the projection runs
+    log.update()                                           # read by another thread (the runner's follow)
+    t.join()
+    assert b.build()["count"]["views"]["s/1"]["n"] == 3
+
+
+def test_since_is_one_snapshot(tmp_path):
+    from orchestra.events import Events
+    from orchestra.facts import FactLog
+    ev = Events(tmp_path / "e.jsonl")
+    ev.publish("a.b.c", subject="x")
+    log = FactLog(ev)
+    log.update()
+    facts, at = log.since(0)
+    ev.publish("a.b.c", subject="y")
+    log.update()
+    assert [f["seq"] for f in facts] == [1] and at == 1, "a reader moving its cursor to at misses nothing"
+    assert [f["seq"] for f in log.since(at)[0]] == [2]

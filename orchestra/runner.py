@@ -98,18 +98,18 @@ class Runner:
         except (FileNotFoundError, ValueError, KeyError, TypeError):
             cursor = end
         self.log.update()
-        counted = backfill(self.log.after(0), project=self.project.name, store=self.store)
+        everything, at = self.log.since(0)
+        counted = backfill(everything, project=self.project.name, store=self.store)   # counted up to at
         counter = EventCollector(self.project.name, counted.counts)
-        if cursor < end:
-            self._handle([f for f in self.log.after(cursor) if f["seq"] <= end], None)
-        cursor = self.log.at
+        self._handle([f for f in everything if f["seq"] > cursor], None)
+        cursor = at
         self.behind.set()                                   # the views brought up to the log at start
         while not self.stop.is_set():
             self.log.update()
-            facts = self.log.after(cursor)
-            if facts or self.log.at != cursor:
+            facts, at = self.log.since(cursor)
+            if facts or at != cursor:
                 self._handle(facts, counter)
-                cursor = self.log.at
+                cursor = at
                 cursor_file.write_text(json.dumps({"at": cursor}))
             self.stop.wait(TICK)
 

@@ -98,18 +98,27 @@ class FactLog:
             if end < self.at:                        # a shorter bus: another bus, read it again
                 self.facts, self.at, self.repeats, self.skipped = [], 0, Repeats(), 0
             new: list[dict] = []
-            while self.at < end:
-                page, nxt = self._page(self.at)
-                if nxt <= self.at:
+            at = self.at
+            while at < end:
+                page, nxt = self._page(at)
+                if nxt <= at:
                     break
                 for seq, ev in page:
                     if self.repeats.seen(ev):
                         self.skipped += 1
                         continue
                     new.append(self.repeats.stamp(ev) | {"seq": seq})
-                self.at = nxt
-            self.facts += new
+                at = nxt
+            self.facts += new                        # the facts first, then the offset they are read to
+            self.at = at
             return new
+
+    def since(self, seq: int) -> tuple[list[dict], int]:
+        """The facts past ``seq`` and the offset they are read to, as one snapshot: what another
+        thread reads in between is in neither, so a reader that moves its cursor to the offset
+        never skips a fact."""
+        with self._lock:
+            return self.after(seq), self.at
 
     def all(self) -> list[dict]:
         self.update()
