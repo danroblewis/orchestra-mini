@@ -52,6 +52,28 @@ agent referees, no write is lost. What it does not guarantee is that the converg
 anyone *intended* (intention preservation): convergence is the easy half, and the field types and
 conflict rules in sections 4 and 6 are where intent is protected or lost.
 
+### The objection from event sourcing: connected and slow is not disconnected
+
+An event-sourcing practitioner answers that a four-minute agent is not disconnected; it is
+connected and slow, which is what optimistic concurrency was built for. Each subject's stream lives
+in one place; an append carries the version the writer read; a stale append fails, and the
+command is decided again against the new state, by a program, not by rerunning the agent. Most
+commands still hold on the new state; only those the new state rejects go back to the agent.
+
+That is right, and it changes the design: **every subject has a home Orchestra**, which appends its
+facts and checks `deps` against the subject's current heads. When they differ, the home re-decides
+the fact against the new state using the field types as its **conflict table**: two adds to a `Set`
+never conflict, two writes to a `Register` do, a `Log` append never does. The typed fields are a
+compact way to write the "which event types conflict with which" table that event stores already
+use; nothing is merged blindly. What must hold at the instant of acceptance (claims, terminal
+transitions like `resolved`) is checked there, with real exclusion.
+
+The CRDT part is what is left when there is no home to ask: a laptop offline, two Orchestras
+replicating each other's subjects, an agent's branch. There the same field types give the merge,
+and the rules in section 6 say what can and cannot be guaranteed without coordination. So the
+design is an event store per subject for decisions, and CRDT merge for replication and for working
+offline, with one set of types serving both.
+
 ## 3. Where the facts come from
 
 Asking agents to emit facts themselves (a `rename_function` tool instead of Edit, a
@@ -59,10 +81,13 @@ Asking agents to emit facts themselves (a `rename_function` tool instead of Edit
 at formal output. Agents should work the way they already work. The facts are derived, at two
 levels:
 
-- **Raw events: the session log, wrapped.** Each entry goes into Orchestra's log as it is, inside
-  our envelope (`type: agent.session.entry`, `subject`: the session, `data`: the entry, with large
-  tool results truncated to a hash and a pointer to the original file). They merge by union and
-  never conflict, because nothing in them is shared.
+- **Evidence: the session log, kept beside the event log, not in it.** Session entries are
+  high-volume and hold everything an agent read, secrets and personal data included; they are not
+  domain events, and mixing them into the domain log is how an event-sourced monolith starts. They
+  go into an **evidence store**: content-addressed, encrypted with one key per session (deleting the
+  key erases the session everywhere it was copied, which is crypto-shredding), with its own
+  retention. They merge by union and never conflict, because nothing in them is shared. The event
+  log refers to them by hash.
 - **Named facts: derived from the log by programs first, a classifier second.** The harness
   records the exact before and after of every tool call (a hook that diffs the working tree, so an
   edit made through the shell is caught too); a syntax-tree detector turns each diff into change
@@ -70,7 +95,10 @@ levels:
   turns intent into work facts only against an outcome (the test failed on the baseline and passes
   after). A cheap classifier over a window of the session (the request, the agent's reasoning, the
   tool calls and results) adds what programs cannot: the *why*, and the windows no catalogue entry
-  fits. The named fact points back to its evidence:
+  fits. Detector and classifier output is recorded as what it is, an observation
+  (`classification.recorded`, with its label, deriver, version and confidence), not as a domain
+  fact. It becomes a domain fact only when it is checked (and, for a branch, at merge), submitted as
+  a command the subject's home accepts or rejects. The named fact points back to its evidence:
 
   Measured (`~/agent-facts-lab`, eight small coding tasks, Claude Code on Sonnet, $1.18 in all): the
   detector over harness diffs recorded every catalogued change fact (precision and recall 1.00 on
@@ -82,21 +110,21 @@ levels:
   is given the detector's facts and the window together, and is never the only source.
 
 ```jsonl
-{"type": "agent.session.entry", "subject": "session/7f3a", "source": "agent/worker-3", "id": "e41", "data": {"uuid": "e41", "parentUuid": "e40", "type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "src/inventory.py", "old_string": "…", "new_string": "…"}}]}}}
-{"type": "agent.session.entry", "subject": "session/7f3a", "source": "agent/worker-3", "id": "e42", "data": {"uuid": "e42", "parentUuid": "e41", "type": "user", "toolUseResult": {"sha256": "c09e…", "truncated": true}}}
-{"type": "code.function_body_changed", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast", "id": "c7", "caused_by": ["e41", "e42"], "data": {"lines_changed": 2}}
-{"type": "work.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "checker", "caused_by": ["c7", "e38"], "data": {"by": "agent/worker-3", "failed_before": true, "passes_after": true, "why": "reserve compared the quantity to on_hand instead of on_hand - reserved"}}
+{"type": "classification.recorded", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast@3", "id": "c7…", "caused_by": ["evidence:sha256:41e0…", "evidence:sha256:42b9…"], "data": {"label": "code.function_body_changed", "lines_changed": 2}}
+{"type": "work.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "checker", "id": "5d1a…", "caused_by": ["c7…", "evidence:sha256:38aa…"], "data": {"by": "agent/worker-3", "failed_before": true, "passes_after": true, "why": "reserve compared the quantity to on_hand instead of on_hand - reserved"}}
 ```
 
 Two rules make derived facts safe in a CRDT:
 
 1. **A classification is recorded once and never rerun.** Replicas must apply the same operations,
    and a model is not deterministic, so the label is itself the fact, with the classifier's version
-   and confidence. Replicas copy the label; they never reclassify. A better classifier later emits
-   correcting facts that supersede the old ones; it never rewrites them. A derived fact's id is
-   content-addressed, `hash(type, subject, caused_by, deriver version)`, so two Orchestras deriving
-   from the same session mint the same id, union deduplicates it, and a `Counter` never counts it
-   twice. Every other fact carries a globally unique id (a UUID, not a local sequence like `e41`).
+   and confidence. Replicas copy the label; they never reclassify. A better classifier later records
+   new classifications that supersede the old ones; it never rewrites them. A classification's id is
+   content-addressed, `hash(label, subject, caused_by)`, without the deriver's version: two
+   Orchestras, or two versions of the classifier, that agree produce the same id, and union
+   deduplicates it; where they disagree, the newer supersedes the older on the same evidence, and
+   everything counted from it (the system dynamics model's flows included) is a projection,
+   rebuilt. Every other fact carries a globally unique id (a UUID, not a local sequence).
 2. **Facts that replay and facts that describe are different.** A `function_renamed` produced by a
    rename tool (or recognised exactly by a syntax-tree diff) can be applied again on top of someone
    else's change: a rename and a change to the same function's body commute, where text patches
@@ -105,15 +133,20 @@ Two rules make derived facts safe in a CRDT:
    git unless a fact replays. The CRDT's own territory is the shared record that is not code:
    items, claims, findings, statuses, the model.
 
-Agents can still emit facts directly when they have a natural tool for it (a decision agent's
-answer is already a fact), and programs always can. Derivation is for the work that happens in free
-form.
+Agents can still write directly when they have a natural tool for it (a decision agent's answer,
+a claim), and programs always can. Strictly, what an agent writes is a **command**, an intent, and
+the subject's home is the command handler that turns it into a fact or rejects it; merge-time
+classification is command handling too. A rejected command changed nothing, so it goes to a command
+audit log, not into the item's fold. Derivation is for the work that happens in free form.
 
 ## 4. What it looks like
 
 The AI writing an integration writes a **model**: the item's fields, each with a CRDT type from a
 short menu, and the named facts that change it. The same catalogue is the classifier's list of
-answers. Orchestra derives the merge from the types; nobody writes merge code. Underneath, every
+answers. Orchestra derives the fold, the conflict table and the merge from the types; nobody
+writes merge code. `ops()` below lives in the model file, not in the stored events: the events say
+what happened, and the model says what that means for the item, so changing a field's type is
+rebuilding a projection, not migrating events. Underneath, every
 type is the same thing: a deterministic fold over the set of facts on a subject, in the order of
 (hybrid logical clock, id). The clock is stamped once, by the first Orchestra to ingest the fact,
 and never restamped; it respects causality (a fact always sorts after the facts in its `deps`),
@@ -235,7 +268,7 @@ when a branch's changes count, is the hard part. That is merge-time classificati
 
 | CRDT idea | Orchestra |
 |---|---|
-| a replica's change log | an agent's session log, wrapped |
+| a replica's change log | an agent's session log, in the evidence store |
 | fork at some heads | the agent reads an item; its Read results record the heads it forked from (`deps`) |
 | working on a fork | the agent working on a branch, its facts on the branch's stream |
 | merge, keeping conflicts | the branch merged, its net change classified into facts on main |
@@ -256,7 +289,10 @@ causally: a late fact that sorts *before* what the agent read (a `Log` entry ins
 is different news from one after it, and the agent is told which. Its own late writes still merge,
 because CRDT operations don't depend on being fresh, and where freshness matters the stale-write
 guard turns them into conflicts rather than overwrites. Staleness is detectable without the agent's
-help: its `deps` say what it read.
+help: its `deps` say what it read, recorded by the harness when the agent reads an item through an
+Orchestra tool rather than inferred from file reads. Whether a model can use a delta that arrives
+in the middle of its reasoning is an open question; the guaranteed part is that its late write
+cannot silently win.
 
 **Lost updates (2).** There are no whole-object writes, only operations on typed fields. Two
 agents' operations on different fields, different keys, a set or a log never overwrite each other.
@@ -271,12 +307,18 @@ the rest is git's merge, as now.
 
 **Duplicate work (4): advisory claims.** A claim is an operation too: `Map[job, Claim]` where a
 claim has a holder and a lease. Two agents claiming the same job at once resolve deterministically
-(earliest clock wins, ties by id); the loser sees on its stdin that it lost and stops. This
-*reduces* duplicate work; it cannot prevent it. A CRDT cannot give mutual exclusion, which needs
-consensus: a claim with an earlier clock that arrives late (a laptop that was offline) takes the job
-after the holder has worked on it, and leases assume clocks roughly agree. Where duplicate work is
-expensive, claims for that kind of job go through one authority per subject (a sequencer), the one
-place this design admits a hub.
+(earliest clock wins, ties by id); the loser sees on its stdin that it lost and stops. Merged that
+way, a claim *reduces* duplicate work and cannot prevent it: a CRDT cannot give mutual exclusion,
+and a claim with an earlier clock that arrives late (a laptop that was offline) takes the job after
+the holder has worked on it. So claims are decided at the job's home: one claim stream per job, the
+first append accepted (it expects the stream not to exist yet), and a lease kept by a process
+manager whose timeout releases it. That is real exclusion, the standard reservation pattern. Only
+offline, with no home to ask, are claims advisory.
+
+A related trap: when one Orchestra syncs another's facts, facts matching its machines' `on:`
+triggers would start its agents again. Triggers fire only on facts appended live at that
+Orchestra, never on synced or replayed ones, with (machine, triggering fact id) as an idempotency
+key.
 
 **Unvalidated writes (5).** "Checked against the state it lands on" sounds right and is wrong:
 which state a fact lands on depends on delivery order, so two Orchestras would accept and reject
@@ -289,11 +331,14 @@ check splits in two:
   written by someone who had already seen `resolved` is rejected everywhere, recorded as rejected,
   and the writer is told. A derived fact is also checked against its outcome (the test really
   passes) before it is recorded.
+- **At the home, against current state.** For a subject whose home is reachable, this is the
+  ordinary aggregate check: the home rejects a `SeverityRaised` on a resolved incident outright, as
+  an event store would. The two cases below are what remains when facts are written without the
+  home, offline or on another Orchestra.
 - **Violations, on the merged state.** A `SeverityRaised` concurrent with `resolved` passes
   admission on both sides, and the merged incident breaks the rule. That is not rejected; it is a
   derived view, a flagged violation computed from the merged state, which a later fact resolves
-  (reopen, or withdraw). For the few transitions that must be final at once, the subject gets one
-  authority that orders them, as with expensive claims.
+  (reopen, or withdraw). Transitions that must be final at once are accepted only by the home.
 
 The facts and their rules are still a state machine shared by every writer, enforced outside all
 of them; it is just honest about which rules hold without coordination.
@@ -369,14 +414,21 @@ facts are the flows, merged facts on main for the system, branch facts for the a
 - **A wrong classification is a wrong fact that merges cleanly.** Hence a confidence threshold
   (below it, the window stays raw events), a check against an outcome wherever one exists, and the
   raw events kept so facts can be derived again and corrected.
-- **Session logs are large and hold everything an agent read.** Keep their structure, truncate big
-  tool results to a hash and a pointer, and decide per project what may be ingested at all.
+- **Session logs are large.** Keep their structure, truncate big tool results to a hash and a
+  pointer, and decide per project what may be ingested at all.
 - **Bookkeeping the types need.** Removes leave tombstones (a `Set` must remember removed tags);
   they can be dropped only once every replica has seen them (causal stability), which with laptops
   that go offline may be never, so the log grows. Snapshots of the fold keep reads fast.
 - **The model will change.** A field may move from `Register` to `Choice`, or split in two; old
-  facts must still fold. That needs a versioned fold or lenses between model versions (Ink &
-  Switch's Cambria), decided before the first change, not after.
+  facts must still fold. Because events never carry merge operations, that is upcasting at read
+  time and rebuilding the folds. Only two Orchestras running different model versions at once need
+  more (lenses between versions, as in Ink & Switch's Cambria).
+- **One file does four jobs.** The model is the event schema, the classifier's labels, the conflict
+  table and the system dynamics model's structure; a change to one moves all four. Version it, and
+  treat a change as a migration of each.
+- **Session logs and privacy.** They hold everything an agent read. Immutable, replicated logs make
+  deletion impossible unless planned for: hence the separate evidence store, one key per session,
+  and crypto-shredding.
 - **`source` is self-declared.** Within one Orchestra that is fine; facts that cross between
   Orchestras need signatures, or a peer can write as anyone.
 - **Language-neutral.** The model exports a JSON Schema per fact, with each field's CRDT type as an
@@ -389,16 +441,17 @@ facts are the flows, merged facts on main for the system, branch facts for the a
 ## 10. What would be built, in order
 
 1. The type menu and generic merge in Orchestra, driven by a model's JSON Schema.
-2. Facts with globally unique (or content-addressed) ids, `deps` and a hybrid clock; admission by
-   `requires` against the writer's causal past, recorded as events; violations on the merged state
-   as a derived view.
-3. Session logs ingested as wrapped entries; harness diffs per tool call; a syntax-tree detector
+2. A home per subject: appends checked against current heads, re-decided by the conflict table,
+   rejections to a command audit log; claim streams with leases. Facts with globally unique (or
+   content-addressed) ids, `deps` and a hybrid clock.
+3. Session logs in an evidence store (per-session keys); harness diffs per tool call; a syntax-tree detector
    for change facts, a checker for work facts, and a classifier for the why and the gaps, each fact
    with `caused_by`.
 4. Delivery of an item's new facts to running processors working on it (deltas on stdin).
 5. Branch streams, and classification of the net change at merge.
 6. Claims with leases, as a `Map` type, for work allocation without a scheduler.
 7. The setup brief asks for the model first, then the collector and processors that import it.
-8. Later: inverse facts for undo; syncing logs between Orchestras; replayable code facts; `Text`.
+8. Later: syncing between Orchestras (CRDT merge, admission against the causal past, violations as
+   a view, triggers only on live appends); undo by id; replayable code facts; `Text`.
 
 Steps 1 to 4 are the coordination core; the rest follows when a real case asks for it.
