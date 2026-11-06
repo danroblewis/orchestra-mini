@@ -421,31 +421,81 @@ Most of the value may be in uses that need no merge at all:
 
 ## 8. The objection: "if the AI writes the facts, it's writing the system dynamics model, so why estimate?"
 
-It isn't. The model file declares **what can happen**; the system dynamics model is about **how
-fast, how much, after how long and because of what**. These are different things, and only the
-first can be written down:
+It isn't, but the reason is narrower than "facts give the structure, data gives the numbers". The
+model file gives the **stoichiometry**: which transitions exist, and which state each one moves an
+item from and to. It also gives part of the **measurement map**: which facts count which
+transitions. It does not give the **rate laws**: what each transition's rate depends on (load, the
+length of another queue, the error rate, time of day). In system dynamics those dependencies *are*
+structure, so estimation is still structure selection over rate laws, plus parameter estimation;
+the facts narrow the search, they don't settle it.
 
-| The model file gives | Only data gives |
+| The model file gives | Only data gives (all of it structure, not just numbers) |
 |---|---|
-| the states an item can be in (stocks) | how many items are in each state over time |
-| the transitions that can happen (possible flows) | each transition's rate, and what that rate depends on |
+| the states an item can be in | how many items are in each state over time |
+| the transitions that can happen | each transition's rate law: what it depends on, and how strongly |
 | who may cause each transition | how long items stay in each state, and how that stretches under load |
-| | delays, and feedback: does a long review queue cause faster, sloppier reviews and more reopens later? |
-| | the links to the observed system: does a deploy-fixing flow move the error rate, and with what lag? |
-| | hidden states nobody declared (a growing backlog no one tracks as an item) |
+| which facts measure which transition | delays, and feedback (does a long review queue cause sloppier reviews and more reopens?) |
+| | the links to the observed system (does a deploy-fixing flow move the error rate, with what lag?) |
+| | hidden states nobody declared, where some measured flow depends on them (Orchestra's observability check tests exactly this) |
 
-So the declared facts are the model's **structure**, and the estimation gives its **parameters and
-couplings**. This is grey-box system identification, the classical setting for Kalman filtering:
-the structure is known, the parameters and some states are hidden, and the measurements are noisy.
-It is also why the task queue was found so well and the kube simulation wasn't: the queue's
-structure was given by its events, and the filter only had to fit the rates. Linear noise
-approximation fits naturally on top: the facts are counts of discrete transitions, exactly what LNA
-models.
+Two corrections to what this document used to say. The task queue was not "found so well because
+its structure was given": its stocks balance its counters exactly, an accounting identity, and no
+rate law was identified. The kube simulation failed for recorded, unrelated reasons (loops through
+auxiliaries the loop finder could not represent, a step size longer than the autoscaler's settling
+time, counter-reading bugs, an inference window that dropped most series). And the linear noise
+approximation does not "fit naturally": it needs a Markov jump process with large counts and
+unimodal fluctuations, and this system has tens of items, batched arrivals and heavy-tailed
+durations.
 
-Nobody has to be begged to write flows, and with derived facts nobody has to be begged to emit them
-either: the agents work as they do, programs and a classifier name what they did, and the counts of those
-facts are the flows, merged facts on main for the system, branch facts for the agents themselves
-(attempts, abandoned branches, rework).
+### Fact counts are measurements of flows, not the flows
+
+Counts of facts are noisy, delayed, biased measurements:
+
+- **Dated by evidence time.** A fact is dated by when the work happened (its evidence), not when it
+  merged or was ingested; otherwise a pull request that lands twelve facts at once looks like an
+  impulse.
+- **Corrected for the deriver's errors.** Each deriver version has a confusion matrix, estimated from
+  a random audited sample; counts are corrected for it before they reach the filter. Orchestra has
+  seen this fail: discovery once credited an agent that closed items wrongly, because wrong closes
+  look like resolutions in the counts.
+- **Revisions are revisions.** A superseded classification changes past counts; the filter treats it
+  as revised data, and a new deriver version as a known change in the measurement map, not as
+  something that happened in the system.
+- **Main is a survivor population.** Merged work and branch work are different populations; neither
+  stands for the other.
+
+The better model uses what the fact log uniquely has, the item. Each item's facts are an exact,
+censored trajectory through its states, so transition **hazards** can be fitted item by item (with
+the metrics filter's estimated state as covariates), the aggregate stock-and-flow equations derived
+from them, and the result checked against the counts and against the metrics series (data
+reconciliation, as in process engineering: when the balances disagree, a deriver is wrong or a flow
+is unseen). Counts enter the filter as count observations of the integrated flow (Poisson or
+negative binomial), not as Gaussian noise.
+
+### Actions as inputs: identification in closed loop
+
+Agents are dispatched in response to the state (on a surprise, a spike, a failing check), so their
+actions are chosen by the disturbance. Regressing outcomes on such actions credits agents with
+regression to the mean: one is sent at a spike, the spike decays anyway, and the agent looks
+effective. The classifier makes it worse when it names facts from the agent's own words, so the
+sensor's errors correlate with the actor. So:
+
+- Never estimate an action's effect by regressing on dispatches triggered by the state.
+- Log each dispatch's probability, and randomize a fraction of near-threshold dispatches and their
+  timing; the threshold itself then gives a regression-discontinuity design, and the randomization
+  an instrument.
+- Validate on held-out windows (innovations white, normalized innovation squared in range) and on
+  predictions made before randomized interventions.
+- Report uncertainty: parameter covariance, and the parameter combinations the data cannot tell
+  apart.
+
+The conflict and rejection rates are signals too. Stale-command rejections should run at about
+1 − exp(−λ·τ), the rate of others' writes times how stale a session gets: a free consistency check
+on session lengths and write rates, and a measure of how coherent the fleet is.
+
+Nobody has to be begged to write flows, or to emit facts: the agents work as they do, programs and
+a classifier name what they did, and the corrected counts measure the flows (merged facts for the
+system, branch facts for the agents themselves: attempts, abandoned branches, rework).
 
 ## 9. Costs, and how to keep them small
 
@@ -473,7 +523,7 @@ facts are the flows, merged facts on main for the system, branch facts for the a
   time and rebuilding the folds. Only two Orchestras running different model versions at once need
   more (lenses between versions, as in Ink & Switch's Cambria).
 - **One file does four jobs.** The model is the event schema, the classifier's labels, the conflict
-  table and the system dynamics model's structure; a change to one moves all four. Version it, and
+  table and the system dynamics model's stoichiometry; a change to one moves all four. Version it, and
   treat a change as a migration of each.
 - **Session logs and privacy.** They hold everything an agent read. Immutable, replicated logs make
   deletion impossible unless planned for: hence the separate evidence store, one key per session,
