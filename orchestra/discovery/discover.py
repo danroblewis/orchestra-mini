@@ -35,12 +35,12 @@ UNITS = {"second": 1.0, "minute": 60.0, "hour": 3600.0}
 
 
 def slug(s: Series) -> str:
-    parts = [s.name] + [v for k, v in sorted(s.labels.items()) if k not in ("project", "command", "store")]
+    parts = [s.name] + [v for k, v in sorted(s.labels.items()) if k not in ("project", "machine", "store")]
     return re.sub(r"[^a-z0-9]+", "_", " ".join(parts).lower()).strip("_") or "series"
 
 
 def title(s: Series) -> str:
-    said = [f"{k}={v}" for k, v in sorted(s.labels.items()) if k not in ("project", "command", "store")]
+    said = [f"{k}={v}" for k, v in sorted(s.labels.items()) if k not in ("project", "machine", "store")]
     return s.name + (f" ({', '.join(said)})" if said else "")
 
 

@@ -2,7 +2,7 @@
 --output-format json --json-schema``, so it uses the owner's Claude Code sign-in. It asks the
 ``question`` with the event and the item's ``inputs`` fields (all of them when none are named),
 and publishes ``decision.made`` (the answer, its confidence, a one-line reason) and
-``<process>.<answer>``. Below ``min_confidence`` the answer is ``unsure``."""
+``<machine>.<answer>``. Below ``min_confidence`` the answer is ``unsure``."""
 
 from __future__ import annotations
 
@@ -19,11 +19,11 @@ def schema(answers: list[str]) -> str:
         "reason": {"type": "string", "description": "one line"}}})
 
 
-def prompt(proc, event, item) -> str:
+def prompt(machine, event, item) -> str:
     fields = (item or {}).get("fields") or {}
-    if proc.inputs:
-        fields = {k: fields.get(k) for k in proc.inputs}
-    return (f"{proc.question}\n\nAnswer one of: {', '.join(proc.answers)}. Give your confidence from 0 to 1 "
+    if machine.inputs:
+        fields = {k: fields.get(k) for k in machine.inputs}
+    return (f"{machine.question}\n\nAnswer one of: {', '.join(machine.answers)}. Give your confidence from 0 to 1 "
             f"and a one-line reason.\n\nThe event:\n{json.dumps(event, indent=2)}\n\n"
             f"The item's fields:\n{json.dumps(fields, indent=2)}\n")
 
@@ -48,25 +48,25 @@ def answer_of(lines: list[str]) -> tuple[dict | None, float | None]:
     return None, None
 
 
-def run_decision(project, proc, event, item, env, publish_event, log) -> tuple[int | None, float | None, str | None]:
-    argv = [project.config.agent.command, "-p", "--output-format", "json", "--json-schema", schema(proc.answers)]
-    argv += ["--model", proc.model] if proc.model else []
-    res = run(argv, project.repo, log, timeout=proc.timeout, env=env, stdin=prompt(proc, event, item))
+def run_decision(project, machine, event, item, env, out, log) -> tuple[int | None, float | None, str | None]:
+    argv = [project.config.agent.command, "-p", "--output-format", "json", "--json-schema", schema(machine.answers)]
+    argv += ["--model", machine.model] if machine.model else []
+    res = run(argv, project.repo, log, timeout=machine.timeout, env=env, stdin=prompt(machine, event, item))
     got, cost = answer_of(res.lines)
     if not res.ok or got is None:
         log_to(log, "".join(res.lines)[-4000:])
         return res.rc, cost, res.error or ("timed out" if res.timed_out else "no answer in the output")
-    answer = got.get("answer") if got.get("answer") in proc.answers else "unsure"
+    answer = got.get("answer") if got.get("answer") in machine.answers else "unsure"
     try:
         confidence = float(got.get("confidence"))
     except (TypeError, ValueError):
         confidence = 0.0
-    if confidence < proc.min_confidence:
+    if confidence < machine.min_confidence:
         answer = "unsure"
-    data = {"process": proc.name, "answer": answer, "confidence": confidence, "reason": str(got.get("reason") or "")}
+    data = {"machine": machine.name, "answer": answer, "confidence": confidence, "reason": str(got.get("reason") or "")}
     subject = (event or {}).get("subject")
-    for t, d in (("decision.made", data), (f"{proc.name}.{answer}", {k: data[k] for k in ("confidence", "reason")})):
-        ev, _ = make_event({"type": t, "subject": subject, "data": d}, proc.name,
+    for t, d in (("decision.made", data), (f"{machine.name}.{answer}", {k: data[k] for k in ("confidence", "reason")})):
+        ev, _ = make_event({"type": t, "subject": subject, "data": d}, machine.name,
                            f"{t}:{(event or {}).get('id', '')}:{env.get('ORCHESTRA_RUN', '')}")
-        publish_event(ev)
+        out.publish(ev)
     return res.rc, cost, None

@@ -40,7 +40,7 @@ def cmd_init(args) -> int:
 # overlay, scripts and prompts kept beside it, a cursor a script keeps) is the owner's and is never
 # touched (the owner, 2026-11-05: an earlier reset removed everything but a keep-list, and with it
 # the scripts the setup agent had put there).
-DATA = ("events.jsonl", "metrics.jsonl", "items.json", "cursor.json", "health.json", "endpoint.json", "web.json",
+DATA = ("events.jsonl", "metrics.jsonl", "items.json", "cursor.json", "kinds.json", "endpoint.json", "web.json",
         "model", "runs", "logs", "stores")
 
 
@@ -133,17 +133,35 @@ def cmd_events(args) -> int:
 
 
 def cmd_emit(args) -> int:
+    """One event, or one metric line, from the argument; its source is ``ORCHESTRA_SOURCE`` (a
+    machine's run sets it) unless the line names one."""
+    import uuid
+
+    from .output import metric, remember_kinds
     try:
         raw = json.loads(args.json)
     except ValueError:
-        print("not JSON", file=sys.stderr)
+        raw = None
+    if not isinstance(raw, dict):
+        print("not a JSON object", file=sys.stderr)
         return 2
-    import uuid
-    ev, why = event(raw, os.environ.get("ORCHESTRA_PROCESS") or "cli", uuid.uuid4().hex) if isinstance(raw, dict) else (None, "not an object")
+    source = os.environ.get("ORCHESTRA_SOURCE") or "cli"
+    project = _project(args)
+    if "metric" in raw and "value" in raw:
+        point, why = metric(raw, os.environ.get("ORCHESTRA_MACHINE") or source, time.time())
+        if point is None:
+            print(why, file=sys.stderr)
+            return 2
+        if raw.get("kind"):
+            remember_kinds(project, {point.series: raw["kind"]})
+        metrics.for_project(project).write([point])
+        print(f"{point.series} {point.value:g}")
+        return 0
+    ev, why = event(raw, source, uuid.uuid4().hex)
     if ev is None:
         print(why, file=sys.stderr)
         return 2
-    fresh = Publisher(Events.for_project(_project(args))).publish(ev)
+    fresh = Publisher(Events.for_project(project)).publish(ev)
     print(ev["id"] + ("" if fresh else " (duplicate: already on the bus)"))
     return 0
 
@@ -199,8 +217,11 @@ def cmd_items(args) -> int:
 
 
 def cmd_runs(args) -> int:
-    for r in runs.read(_project(args), args.process, args.n):
-        print(json.dumps(r))
+    for r in runs.read(_project(args), args.machine, args.n):
+        print("  ".join(filter(None, [
+            r.get("start"), r.get("machine"), r.get("kind"), f"exit {r.get('exit')}", f"{r.get('events', 0)} events",
+            f"{r['points']} points" if r.get("points") else "", f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "",
+            f"for {r['subject']}" if r.get("subject") else "", r.get("note")])))
     return 0
 
 
@@ -214,8 +235,8 @@ def cmd_tool(args) -> int:
     if "--help" in args.args or "-h" in args.args:
         print(help_text(tool, project.repo))
         return 0
-    source = os.environ.get("ORCHESTRA_PROCESS") or tool.name
-    caller = project.config.process(os.environ.get("ORCHESTRA_PROCESS", ""))
+    source = os.environ.get("ORCHESTRA_SOURCE") or tool.name
+    caller = project.config.machine(os.environ.get("ORCHESTRA_MACHINE", ""))
     if caller and caller.tools is not None and tool.name not in caller.tools:
         print(f"{caller.name} may not call {tool.name}; its tools: {', '.join(caller.tools) or 'none'}", file=sys.stderr)
         return 2
@@ -277,7 +298,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--subject")
     s.add_argument("-n", type=int, default=20)
     s.set_defaults(fn=cmd_events)
-    s = sub.add_parser("emit", help="publish one event")
+    s = sub.add_parser("emit", help="publish one event, or write one metric line")
     s.add_argument("json")
     s.set_defaults(fn=cmd_emit)
     s = sub.add_parser("metrics", help="the series and their latest values")
@@ -295,8 +316,8 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("-n", type=int, default=20)
     s.add_argument("--page", type=int, default=0)
     s.set_defaults(fn=cmd_items)
-    s = sub.add_parser("runs", help="process runs")
-    s.add_argument("process", nargs="?")
+    s = sub.add_parser("runs", help="machine runs, newest first")
+    s.add_argument("machine", nargs="?")
     s.add_argument("-n", type=int, default=20)
     s.set_defaults(fn=cmd_runs)
     s = sub.add_parser("tool", help="call a tool: orchestra tool NAME key=value ...", add_help=False)

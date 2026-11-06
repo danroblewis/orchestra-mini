@@ -111,46 +111,53 @@ def label(entry: Any, i: int) -> str:
     return entry.get("name") if isinstance(entry, dict) and entry.get("name") else str(i)
 
 
+LISTS = {"stores": schema.Store, "tools": schema.Tool, "machines": schema.Machine, "items": schema.Reducer}
+RENAMED = ("processes", "metrics", "events")      # one section now: machines (the owner, 2026-11-05)
+
+
 def build_config(raw: dict) -> schema.Config:
     """The config from the merged layers, with each named entry's path given by its name."""
     if not isinstance(raw, dict):
         raise ConfigError(f"the config must be a map, not {raw!r}")
-    shaped = dict(raw)
-    for key in ("stores", "metrics", "events", "tools", "processes", "items"):
-        if key in shaped and not isinstance(shaped[key], list):
+    for key in RENAMED:
+        if key in raw:
+            raise ConfigError(f"{key}: is now machines: (SPEC §1)")
+    for key in LISTS:
+        if key in raw and not isinstance(raw[key], list):
             raise ConfigError(f"{key}: expected a list")
-    cfg = build(schema.Config, {k: v for k, v in shaped.items() if k not in
-                                ("stores", "metrics", "events", "tools", "processes", "items")})
-    cls = {"stores": schema.Store, "metrics": schema.MetricsCommand, "events": schema.EventsCommand,
-           "tools": schema.Tool, "processes": schema.Process, "items": schema.Reducer}
-    for key, c in cls.items():
-        setattr(cfg, key, [build(c, e, f"{key}[{label(e, i)}]") for i, e in enumerate(shaped.get(key) or [])])
+    cfg = build(schema.Config, {k: v for k, v in raw.items() if k not in LISTS})
+    for key, c in LISTS.items():
+        setattr(cfg, key, [build(c, e, f"{key}[{label(e, i)}]") for i, e in enumerate(raw.get(key) or [])])
     check(cfg)
     return cfg
 
 
 def check(cfg: schema.Config) -> None:
-    """What the types alone don't say: names unique, kinds known, each kind's fields given."""
-    for key in ("stores", "metrics", "events", "tools", "processes"):
+    """What the types alone don't say: names unique, kinds and modes known, each kind's fields given."""
+    for key in ("stores", "tools", "machines"):
         names = [e.name for e in getattr(cfg, key)]
         if dup := sorted({n for n in names if names.count(n) > 1}):
             raise ConfigError(f"{key}: the name {dup[0]!r} is given twice")
     tools = {t.name for t in cfg.tools}
-    for p in cfg.processes:
-        at = f"processes[{p.name}]"
-        if p.kind not in schema.KINDS:
-            raise ConfigError(f"{at}.kind: {p.kind!r} is not one of {', '.join(schema.KINDS)}")
-        if p.kind == "agent" and not p.prompt:
+    for m in cfg.machines:
+        at = f"machines[{m.name}]"
+        if m.kind not in schema.KINDS:
+            raise ConfigError(f"{at}.kind: {m.kind!r} is not one of {', '.join(schema.KINDS)}")
+        if m.mode not in schema.MODES:
+            raise ConfigError(f"{at}.mode: {m.mode!r} is not one of {', '.join(schema.MODES)}")
+        if m.kind == "agent" and not m.prompt:
             raise ConfigError(f"{at}.prompt: an agent needs its prompt file")
-        if p.kind == "program" and not p.command:
+        if m.kind == "program" and not m.command:
             raise ConfigError(f"{at}.command: a program needs its command")
-        if p.kind == "decision" and (not p.question or not p.answers):
+        if m.kind == "decision" and (not m.question or not m.answers):
             raise ConfigError(f"{at}: a decision needs a question and its answers")
-        if p.continuous and p.kind != "program":
-            raise ConfigError(f"{at}.continuous: only a program is kept running")
-        if not (p.on or p.every or p.continuous):
-            raise ConfigError(f"{at}: say when it runs: on, every or continuous")
-        for t in p.tools or []:
+        if m.mode == "continuous" and m.kind == "decision":
+            raise ConfigError(f"{at}.mode: a decision is one answer per event, never continuous")
+        if m.mode == "continuous" and m.every:
+            raise ConfigError(f"{at}.every: a continuous machine is kept running, never scheduled")
+        if m.mode == "once" and not (m.on or m.every):
+            raise ConfigError(f"{at}: say when it runs: on, every, or mode: continuous")
+        for t in m.tools or []:
             if t not in tools:
                 raise ConfigError(f"{at}.tools: no tool named {t!r}")
     for s in cfg.stores:

@@ -1,13 +1,14 @@
 # Orchestra, minimal
 
-Orchestra is a dumb system. It keeps an **event bus** and a **metrics store**, runs **commands**,
-reads their **stdout**, folds events into **items**, starts **processes** when the events they
-name arrive, knows the **machines** that act from the bus, and guesses a **system dynamics model**
-from the metrics. Everything a team does lives in its own scripts and prompts; Orchestra only runs
-them, records what they say, and shows it.
+Orchestra is a dumb system. It keeps an **event bus** and a **metrics store**, runs **machines**
+(stream processors: events in as JSON lines on stdin, events and metrics out as JSON lines on
+stdout), folds events into **items**, knows the other machines that act from the bus, and guesses
+a **system dynamics model** from the metrics. Everything a team does lives in its own scripts and
+prompts; Orchestra only runs them, records what they say, and shows it.
 
 The owner, 2026-11-05: "This should be so damn simple that someone could read the whole config and
-even edit it by hand." "Most of our interface is 'run a command' and 'parse the stdout'."
+even edit it by hand." "Most of our interface is 'run a command' and 'parse the stdout'." And:
+every processing entity is a machine, the collectors and the AI agents too.
 
 ## 1. The config file
 
@@ -16,8 +17,7 @@ One file, YAML or JSON (the same schema), in layers merged in this order, the la
 1. `orchestra.yaml` (or `.yml`, `.json`) at the repository root, optional, shared by the team;
 2. the private overlay, `~/.orchestra/<project>/orchestra.yaml` (or `.json`), the owner's own.
 
-Maps merge key by key; a list of named entries (`stores`, `metrics`, `events`, `tools`,
-`processes`) merges by `name`, an overlay entry replacing the repository's of that name whole, and
+Maps merge key by key; a list of named entries (`stores`, `tools`, `machines`) merges by `name`, an overlay entry replacing the repository's of that name whole, and
 `{name: x, enabled: false}` removing it. Unknown keys are refused with the key's path, so a typo
 never silently does nothing. **Secrets are environment variables only**: a field ending `_env` names
 one (`token_env: JIRA_TOKEN`); a literal secret in the file is refused. Durations are `30s`, `5m`,
@@ -40,17 +40,6 @@ stores:                        # other stores, read in place, never copied (Prom
     rate: 1/s                  # default 1/s; requests per second at most
     per_day: 5000              # default 5000 requests a day
 
-metrics:                       # commands whose stdout is Prometheus text, one sample per line
-  - name: jira_counts          # required
-    command: npm run get_metrics   # required; run without a shell, in the repository
-    every: 5m                  # default 1m
-    timeout: 60s               # default 30s
-
-events:                        # commands whose stdout is JSON lines of events (section 2)
-  - name: jira
-    command: scripts/jira_events.py
-    every: 2m                  # default 1m; or continuous: true for a command that keeps printing
-
 tools:                         # commands agents may call (section 4)
   - name: notify_slack
     command: scripts/slack_post.py {channel} {text}
@@ -58,35 +47,44 @@ tools:                         # commands agents may call (section 4)
   - name: open_pr
     command: gh pr create --draft --head {branch} --title {title} --body-file {body_file}
 
-processes:                     # what Orchestra starts (section 3)
+machines:                      # what Orchestra runs (section 3)
+  - name: jira_counts          # required; a collector: a program on a schedule
+    command: npm run get_metrics   # program: required; run without a shell, in the repository
+    every: 5m                  # once, scheduled: run every 5m, nothing on stdin
+  - name: jira
+    command: scripts/jira_events.py
+    mode: continuous           # once (default) | continuous: kept running, stdin open
   - name: worker
-    kind: agent                # agent (default) | decision | program
-    prompt: prompts/worker.md  # agent: the instructions; the event and item are added
-    on: [task.researched, review.changes, pr.commented]   # ad hoc: started on these events
+    kind: agent                # program (default) | agent | decision
+    prompt: prompts/worker.md  # agent: the instructions; each event and its item are added
+    on: [task.researched, review.changes, pr.commented]   # one run per event (continuous: fed each)
     tools: [open_pr]           # default: every tool
     model: sonnet              # agent and decision: default the harness's own
-    every: 1h                  # scheduled instead of (or as well as) on
-    continuous: false          # a process kept running
-    timeout: 30m               # default 20m
+    timeout: 30m               # once: default 20m
     per_day_usd: 10            # agent and decision: spend cap, default 10
 
-agent:                         # how an agent process runs: default Claude Code
+agent:                         # how an agent machine runs: default Claude Code
   harness: claude_code         # claude_code | pi | codex
   command: claude              # the binary
 ```
 
-## 2. Events
+## 2. Lines
 
-An event command prints one JSON object per line on stdout:
+A machine writes one JSON object per line on stdout. A line with `metric` and `value` is a
+**measurement**, a line with `type` an **event**, and anything else goes to the machine's log (as
+does its stderr).
 
 ```json
 {"type": "jira.issue.transitioned", "subject": "ABC-123", "source": "person.jira.alice",
  "id": "jira:ABC-123:10042", "time": "2026-11-05T10:00:00Z", "data": {"from": "To Do", "to": "In Progress"}}
+{"metric": "queue_depth", "value": 12, "labels": {"queue": "triage"}, "kind": "gauge"}
 ```
+
+An event:
 
 - `type` (required): `<system>.<noun>.<verb>`.
 - `subject`: the item it is about (a ticket key, `owner/repo#12`, `task/abc`). Events without one are kept, about no item.
-- `source`: who acted; default the command's name. People are `person.<system>.<account>`.
+- `source`: who acted; default the machine's name. People are `person.<system>.<account>`.
 - `id`: stable per change; Orchestra drops an event whose id it has. Default: a hash of the line.
 - `time`: when it happened (RFC 3339); default now.
 - `kind`: what the subject is (`github.pr`, `github.issue`, `jira.issue`, `task`); default: the
@@ -95,37 +93,62 @@ An event command prints one JSON object per line on stdout:
 - A line `{"type": "orchestra.actor", "source": "person.jira.alice", "data": {"name": "Alice A"}}`
   names an actor for the pages.
 
-Lines that aren't JSON are kept in the command's log, never published. A command's stderr is its
-log. A process (section 3) publishes the same way: its stdout lines are events. Programs elsewhere
-may also `POST` the same JSON to the events endpoint (`orchestra endpoint` prints it).
+A measurement:
 
-The bus records every event with the CloudEvents envelope (`specversion`, `id`, `source`, `type`,
-`time`, `subject`, `data`); Orchestra fills what the line leaves out.
+- `metric` (required): the series' name, for what it measures (`queue_depth`, `reviews_done_total`).
+- `value` (required): a number.
+- `labels`: a map of label names to values.
+- `time`: RFC 3339 or Unix seconds; default when it was read.
+- `kind`: `counter` (a running total, read by its increments) or `gauge` (a level); default by the
+  name: `_total` and `_count` are counters, the rest gauges.
 
-## 3. Processes
+Every point is labelled `machine=<name>` (a label of that name on the line is kept as
+`exported_machine`) and `project`. Series named `orchestra_*` are Orchestra's own and refused.
+**Prometheus text** works too: a once run whose first non-empty line is a Prometheus sample or a
+`#` line is read as Prometheus text (`name{label="v"} value [ms]`), written when the run succeeds.
 
-A process is a command Orchestra starts, of one of three kinds:
+Programs elsewhere may also `POST` an event's JSON to the events endpoint (`orchestra endpoint`
+prints it). The bus records every event with the CloudEvents envelope (`specversion`, `id`,
+`source`, `type`, `time`, `subject`, `data`); Orchestra fills what the line leaves out.
 
-- **agent**: an AI agent turn (Claude Code `claude -p` by default) on the prompt file, with the
-  triggering event, the item's state and the tools appended; it acts with its own shell and the
-  owner's credentials (the environment Orchestra runs in, unstripped). Its events are the JSON lines
-  it prints, or `orchestra emit '<json>'` from its shell.
+## 3. Machines
+
+A **machine** is a stream processor: it reads events as JSON lines on stdin and writes events and
+metrics as JSON lines on stdout (section 2). A collector is the case that ignores stdin. Each
+machine has a kind:
+
+- **program**: `command`, run without a shell, in the repository.
+- **agent**: an AI agent (Claude Code `claude -p` by default) on the prompt file, with its tools and
+  how to say what happened appended, and each event with the item's state; it acts with its own
+  shell and the owner's credentials (the environment Orchestra runs in, unstripped). Its lines are
+  those in what it says, or those it writes with `orchestra emit '<json>'` from its shell.
 - **decision**: one model call with `question` and `answers` (and `inputs`: the item fields to
   include); it publishes `decision.made` with the answer, its confidence and a one-line reason, and an
-  event `<process>.<answer>` (so `on: ci_triage.real` reads plainly). Below `min_confidence`
-  (default 0.6) the answer is `unsure`.
-- **program**: `command`, run with the event on stdin; its stdout lines are events.
+  event `<machine>.<answer>` (so `on: ci_triage.real` reads plainly). Below `min_confidence`
+  (default 0.6) the answer is `unsure`. Always once.
 
-Each is started **ad hoc** on the event types in `on` (one run per event; events arriving during a
-run wait in order), **scheduled** by `every`, or kept **continuous**. A process gets the event as
-one JSON line on stdin and in `ORCHESTRA_EVENT`, the item's state as JSON in `ORCHESTRA_ITEM`, and
-`ORCHESTRA_PROJECT`. A running continuous process receives later events on its stdin, one JSON line
-each (the mid-run request). Every run is recorded (`orchestra runs`): start, end, exit code, events
-printed, cost when the harness reports it, its log. A process past its `per_day_usd` is not started
-until the next day and says so in its run record.
+And a mode:
 
-Every process is a **machine**: the Machines page shows it with its runs and the events it
-published. So is every `source` heard on the bus (the people a command reports, other programs).
+- **once** (the default): started for one event, which is written to stdin, then stdin is closed.
+  It may work for minutes and write lines as it goes. With `on`, one run per event of those types (a
+  glob may name them; events arriving during a run wait in order); with `every`, a run on that
+  schedule with nothing on stdin (a tick whose last run hasn't finished is skipped). Both may be given.
+- **continuous**: started when `orchestra run` starts and restarted when it exits; stdin stays open
+  and the events in `on` arrive as they come, one line each. A continuous agent is
+  `claude -p --input-format stream-json --output-format stream-json`: each event is one user
+  message (`{"type": "user", "message": {"role": "user", "content": "<the event and the item>"}}`),
+  its prompt is in its system prompt, and each turn's result gives that turn's cost.
+
+A machine never gets its own events. Every run gets `ORCHESTRA_MACHINE` and `ORCHESTRA_SOURCE` (its
+name: what `orchestra emit` and `orchestra tool` publish as), `ORCHESTRA_EVENT` (the event, once),
+`ORCHESTRA_ITEM` (the item's state), `ORCHESTRA_PROJECT`, `ORCHESTRA_REPO` and `ORCHESTRA_RUN`.
+Every run is recorded (`orchestra runs`): start, end, exit code, events published, points
+written, cost when the harness reports it, its log; a continuous program's run is its process's
+life, a continuous agent's run one turn. An agent or a decision past its `per_day_usd` today is
+not started (a continuous agent is given no events) until the next day, and its run record says so.
+
+The Machines page shows every configured machine with its runs and what it published, and every
+`source` heard on the bus that Orchestra doesn't run (the people a collector reports, other programs).
 
 ## 4. Tools
 
@@ -133,8 +156,8 @@ A tool is a command an agent may call. `{name}` placeholders are filled from the
 each as one argument (never through a shell). An agent's prompt lists its tools with their `help`,
 or, when `help` is absent, the first 20 lines of `command --help`. Agents call a tool by running
 `orchestra tool <name> key=value …`, which runs the command, prints its stdout, and publishes any
-JSON event lines in it. A tool is how the config says what an agent may do beyond reading:
-writing to Slack or opening a PR is in the file because the owner put it there.
+JSON event lines in it as the calling machine. A tool is how the config says what an agent may do
+beyond reading: writing to Slack or opening a PR is in the file because the owner put it there.
 
 ## 5. Items
 
@@ -178,19 +201,22 @@ time comes and publishes `orchestra.prediction.judged`.
 - `orchestra reset [--yes]`: clears the data (bus, metrics, items, runs, logs, model) and keeps the
   config and tokens; refused while `orchestra run` runs.
 - `orchestra init`: makes the state directory and, if asked, an empty `orchestra.yaml`.
-- `orchestra run [--web]`: runs everything; `--web` also serves the pages.
-- `orchestra check`: validates the config and says each store's, command's and process's health.
-- `orchestra events [--type T] [--subject S] [-n N]`, `orchestra emit '<json>'`.
+- `orchestra run [--web]`: runs every machine; `--web` also serves the pages.
+- `orchestra check`: validates the config and says each store's, tool's and machine's health.
+- `orchestra events [--type T] [--subject S] [-n N]`.
+- `orchestra emit '<json>'`: one event or one metric line, as `ORCHESTRA_SOURCE` (default `cli`)
+  unless the line names its source.
 - `orchestra metrics [prefix]`, `orchestra query '<promql>' [--store NAME]`.
-- `orchestra items [show S]`, `orchestra runs [process]`, `orchestra model`, `orchestra tool NAME …`.
+- `orchestra items [show S]`, `orchestra runs [machine]`, `orchestra model`, `orchestra tool NAME …`.
 
-Pages, read only: **Dashboard** (what waits on the owner, open items, process runs), **Items**,
-**Machines** (every source and process, what it publishes and listens for, its runs), **Dynamics**
-(the model), **Core** (bus, metrics store, stores, commands: each one's health and recent errors).
+Pages, read only: **Dashboard** (what waits on the owner, open items, recent runs), **Items**,
+**Machines** (every machine and every source heard, what it publishes and listens for, its runs),
+**Dynamics** (the model), **Core** (bus, metrics store, stores, machines: each one's health and
+recent errors).
 
 ## 8. What is not here
 
 No plugins, no declared model, no consent or confirmations, no workflows engine, no offers or
 leases, no planners, no outbox, no bridges kits, no people map, no TOML. A team's way of working is
-which process listens for which events, in the config file, and the scripts and prompts it names.
+which machine listens for which events, in the config file, and the scripts and prompts it names.
 Anything more is added only when a real flow needs it.

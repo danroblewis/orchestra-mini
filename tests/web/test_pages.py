@@ -22,8 +22,8 @@ NOW = time.time() // 60 * 60
 
 @pytest.fixture
 def site(make_project):
-    p = make_project({"processes": [{"name": "worker", "kind": "program", "command": "true", "on": "tracker.issue.*"}],
-                      "metrics": [{"name": "queues", "command": "true"}],
+    p = make_project({"machines": [{"name": "worker", "command": "true", "on": "tracker.issue.*"},
+                                   {"name": "queues", "command": "true", "every": "1m"}],
                       "stores": [{"name": "far", "url": "http://127.0.0.1:9", "match": '{env="prod"}'}]})
     ev = Events.for_project(p)
     for i in range(30):
@@ -33,7 +33,7 @@ def site(make_project):
                    "time": utc_time(NOW - 10), "data": {"waiting_on": "owner"}})
     ev.bus.append({"specversion": "1.0", "id": "c", "type": "tracker.issue.closed", "source": "worker", "subject": "ABC-4",
                    "time": utc_time(NOW - 5)})
-    runs.record(p, {"id": "r1", "process": "worker", "kind": "program", "start": utc_time(NOW - 20), "end": utc_time(NOW - 19),
+    runs.record(p, {"id": "r1", "machine": "worker", "kind": "program", "start": utc_time(NOW - 20), "end": utc_time(NOW - 19),
                     "exit": 0, "events": 1, "cost_usd": 0.5})
     metrics.for_project(p).write(history(NOW))
     run_once(p, now=NOW)
@@ -81,11 +81,11 @@ def test_each_page_renders(site):
     dash = pages["/"][2]
     assert "Waiting on you" in dash and "ABC-3" in dash and "$0.50" in dash and "Recent runs" in dash
     mach = pages["/machines"][2]
-    assert "worker" in mach and "person.tracker.alice" in mach and "on tracker.issue.*" in mach and "tracker.issue.created ×30" in mach
+    assert "worker" in mach and "person.tracker.alice" in mach and "on tracker.issue.*" in mach and "tracker.issue.created ×30" in mach and "observed" in mach
     dyn = pages["/dynamics"][2]
     assert "queue_depth" in dyn and "× queue_depth_triage per minute" in dyn and "moved by" in dyn and "worker" in dyn and 'id="model"' in dyn
     core = pages["/core"][2]
-    for part in ("bus", "metrics store", "store far", "command queues", "process worker", "discovery"):
+    for part in ("bus", "metrics store", "store far", "machine queues", "machine worker", "discovery"):
         assert part in core
     assert "failing" in core, "the unreachable store says so"
     assert ask(port, "/static/graph.js")[0] == 200 and ask(port, "/static/../server.py")[0] == 404

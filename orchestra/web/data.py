@@ -4,11 +4,11 @@ Every read is of files and the configured bus and stores; nothing here changes a
 from __future__ import annotations
 
 import fnmatch
-import json
 import threading
 import time
 
 from .. import hooks, metrics, runs
+from ..check import failed, how
 from ..events import Events
 from ..items import Items
 from ..machines import machines as all_machines
@@ -39,13 +39,6 @@ def _tail(path, n: int = 5) -> list[str]:
         return path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
     except OSError:
         return []
-
-
-def _health(project) -> dict:
-    try:
-        return json.loads((project.state_dir / "health.json").read_text())
-    except (OSError, ValueError):
-        return {}
 
 
 SHOWN_FIELDS = 4             # a kind's table shows its most common fields, at most this many beside the title
@@ -93,15 +86,20 @@ def item(project, subject: str) -> dict | None:
     return Items(project, Events.for_project(project)).get(subject)
 
 
+def quiet(r: dict) -> bool:
+    """A collector's scheduled run that went well: its runs say it, the dashboard doesn't."""
+    return r.get("kind") == "program" and not r.get("event") and not r.get("events") and not failed(r)
+
+
 def dashboard(project) -> dict:
     found = Items(project, Events.for_project(project)).list()
     owner = [i for i in found if (i.get("fields") or {}).get("waiting_on") == "owner"]
-    spent = {p.name: runs.spent_today(project, p.name) for p in project.config.processes if p.kind != "program"}
+    spent = {m.name: runs.spent_today(project, m.name) for m in project.config.machines if m.kind != "program"}
     return {"waiting": [{"subject": i["subject"], "type": i["type"], "last": i["last"],
                          "title": (i.get("fields") or {}).get("title")} for i in owner],
             "open": len(found), "recent_open": [{"subject": i["subject"], "type": i["type"], "last": i["last"],
                                                   "waiting_on": (i.get("fields") or {}).get("waiting_on")} for i in found[:10]],
-            "runs": runs.read(project, None, 10), "spent_today": round(sum(spent.values()), 4), "spent_by": spent}
+            "runs": [r for r in runs.read(project, None, 500) if not quiet(r)][:10], "spent_today": round(sum(spent.values()), 4), "spent_by": spent}
 
 
 def machines(project) -> dict:
@@ -115,7 +113,7 @@ def machines(project) -> dict:
             for t in [t for t in types if fnmatch.fnmatchcase(t, pat)] or [pat]:
                 edges.append({"type": t, "to": m["name"]})
     for m in found:
-        if m["process"]:
+        if m["kind"]:
             m["recent_runs"] = runs.read(project, m["name"], 5)
     return {"machines": found, "edges": edges}
 
@@ -150,18 +148,14 @@ def core(project) -> dict:
         errors = [f"{time.strftime('%H:%M:%S', time.localtime(x['t']))} {x['error']}" for x in reqlog.last(project, s.name, 50) if x.get("error")]
         out["parts"].append({"part": f"store {s.name}", "ok": err is None and all(ok for ok, _ in lines or []),
                              "said": err or "; ".join(line for _, line in lines or []), "errors": errors[-5:]})
-    health = _health(project)
-    for c in [*project.config.events, *project.config.metrics]:
-        h = health.get(c.name)
-        said = f"last round {h['at']}: " + ("ok" if h.get("ok") else f"failed: {h.get('error')}") if h else "not run yet"
-        out["parts"].append({"part": f"command {c.name}", "ok": not h or bool(h.get("ok")), "said": said,
-                             "errors": _tail(project.state_dir / "logs" / f"{c.name}.log")})
-    for p in project.config.processes:
-        last = runs.read(project, p.name, 1)
-        bad = [r for r in runs.read(project, p.name, 20) if r.get("exit") not in (0, None) or r.get("note")]
-        out["parts"].append({"part": f"process {p.name}", "ok": not last or last[0].get("exit") in (0, None),
-                             "said": f"last run {last[0]['start']} exit {last[0].get('exit')}" if last else "no runs yet",
-                             "errors": [f"{r['start']} exit {r.get('exit')} {r.get('note') or ''}".strip() for r in bad[:5]]})
+    for m in project.config.machines:
+        recent = runs.read(project, m.name, 20)
+        last = recent[0] if recent else None
+        said = f"{how(m)}: " + (f"last run {last['start']} exit {last.get('exit')}" if last else "no runs yet")
+        errors = [f"{r['start']} exit {r.get('exit')} {r.get('note') or ''}".strip() for r in recent if failed(r)][:5]
+        if failed(last):                            # and the end of its log
+            errors += _tail(project.state_dir / "logs" / f"{m.name}.log")
+        out["parts"].append({"part": f"machine {m.name}", "ok": not failed(last), "said": said, "errors": errors})
     errors = [x for x in _tail(project.state_dir / "logs" / "discovery.log", 20) if "Error" in x][-5:]
     out["parts"].append({"part": "discovery", "ok": not errors, "said": f"every {project.config.discovery.every:g} s over "
                          f"{project.config.discovery.window:g} s", "errors": errors})

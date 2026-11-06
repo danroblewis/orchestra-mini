@@ -2,7 +2,7 @@
 
 A series is a name plus labels, like Prometheus. Every series carries a ``project`` label, so
 projects never collide in a shared store, and readers select a project's series by it.
-Orchestra's own series start with ``orchestra_``. Metrics commands (``orchestra.collect``) write
+Orchestra's own series start with ``orchestra_``. Machines (``orchestra.output``) write
 points; discovery and the pages read ranges.
 
 Backends, chosen by ``metrics_store`` in the config or ``ORCHESTRA_METRICS_URL``: ``file`` (the

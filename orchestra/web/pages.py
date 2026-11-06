@@ -57,9 +57,10 @@ def dashboard(d: dict) -> str:
 
 
 def runs_table(rs: list[dict]) -> str:
-    return table(["process", "started", "ended", "exit", "events", "cost", "note"],
-                 [[e(r.get("process")), when(r.get("start")), when(r.get("end")), e(r.get("exit")), e(r.get("events")),
-                   f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "", e(r.get("note"))] for r in rs], "no runs yet")
+    return table(["machine", "started", "ended", "exit", "events", "points", "cost", "note"],
+                 [[e(r.get("machine")), when(r.get("start")), when(r.get("end")), e(r.get("exit")), e(r.get("events")),
+                   e(r.get("points") or ""), f"${r['cost_usd']:.4f}" if r.get("cost_usd") else "", e(r.get("note"))]
+                  for r in rs], "no runs yet")
 
 
 def _value(v) -> str:
@@ -112,16 +113,17 @@ def item(i: dict) -> str:
 def machines(d: dict) -> str:
     rows = []
     for m in d["machines"]:
-        kind = m["process"] or "source"
-        how = ", ".join(filter(None, [f"on {', '.join(m['listens_for'])}" if m["listens_for"] else "",
-                                      f"every {m['every']:g} s" if m.get("every") else "", "continuous" if m.get("continuous") else ""]))
+        kind = m["kind"] or "observed"           # heard on the bus, not run by Orchestra (a person, another program)
+        how = ", ".join(filter(None, ["continuous" if m.get("mode") == "continuous" else "",
+                                      f"on {', '.join(m['listens_for'])}" if m["listens_for"] else "",
+                                      f"every {m['every']:g} s" if m.get("every") else ""]))
         pubs = "<br>".join(f"{e(t)} ×{n}" for t, n in m["publishes"].items())
         rows.append([f'<b>{e(m["name"])}</b>' + (f'<br><span class="quiet">{e(m["label"])}</span>' if m["label"] else ""),
-                     e(kind), e(how), pubs, when(m["last_seen"]), e(m["runs"]) if m["process"] else ""])
+                     e(kind), e(how), pubs, when(m["last_seen"]), e(m["runs"]) if m["kind"] else ""])
     runs = "".join(f'<h3>{e(m["name"])}</h3>{runs_table(m["recent_runs"])}' for m in d["machines"] if m.get("recent_runs"))
     return ('<section><h2>Event map</h2><div id="map" class="graph"></div></section>'
-            + "<section><h2>Machines</h2>" + table(["machine", "kind", "listens for", "publishes", "last heard", "runs"], rows,
-                                                   "no machines yet: no process configured and nothing on the bus") + "</section>"
+            + "<section><h2>Machines</h2>" + table(["machine", "kind", "runs when", "publishes", "last heard", "runs"], rows,
+                                                   "no machines yet: none configured and nothing on the bus") + "</section>"
             + f"<section><h2>Runs</h2>{runs or '<p class=quiet>no runs yet</p>'}</section>")
 
 

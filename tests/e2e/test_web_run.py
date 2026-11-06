@@ -32,14 +32,14 @@ def test_run_with_the_pages(tmp_path):
     (repo / "orchestra.yaml").write_text(yaml.safe_dump({
         "project": "webrun",
         "stores": [{"name": "prom", "url": fake.url, "token_env": "PROM_TOKEN", "match": '{env="prod"}', "rate": "50/s"}],
-        "metrics": [{"name": "local", "command": "scripts/m.py", "every": "1s"}],
-        "events": [{"name": "feed", "command": "scripts/feed.py", "every": "1s"}],
+        "machines": [{"name": "local", "command": "scripts/m.py", "every": "1s"},
+                     {"name": "feed", "command": "scripts/feed.py", "every": "1s"}],
         "discovery": {"every": "2s", "window": "60m"}}))
     script(repo / "scripts" / "m.py", 'print("local_depth 3")')
     script(repo / "scripts" / "feed.py", 'import json; print(json.dumps({"type": "tracker.issue.created", "subject": "X-1", "id": "x1", '
                                          '"data": {"waiting_on": "owner"}}))')
     env = {**os.environ, "ORCHESTRA_HOME": str(home), "PROM_TOKEN": "tok"}
-    for k in ("ORCHESTRA_REPO", "ORCHESTRA_PROCESS", "ORCHESTRA_BUS_URL", "ORCHESTRA_METRICS_URL"):
+    for k in ("ORCHESTRA_REPO", "ORCHESTRA_SOURCE", "ORCHESTRA_MACHINE", "ORCHESTRA_BUS_URL", "ORCHESTRA_METRICS_URL"):
         env.pop(k, None)
     exe = str(Path(sys.executable).parent / "orchestra")
     proc = subprocess.Popen([exe, "run", "--web", "--listen", "127.0.0.1:0", "--seconds", "8"], cwd=repo, env=env,

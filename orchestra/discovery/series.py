@@ -3,7 +3,8 @@ project's metrics store, every store's series within its match (``orchestra.stor
 Orchestra's count of the bus, ``orchestra_events_total{type, source}``.
 
 A series is sampled at each step as its last value at or before it. A **counter** (a store's flow;
-an own series named ``_total`` or ``_count`` that never falls but by a reset) is read by its
+an own series named ``_total`` or ``_count``, or one a metric line said is a ``counter``, that
+never falls but by a reset) is read by its
 increments, a drop being a reset; before its first point it is 0 when it is Orchestra's count of the
 bus (which counts from the first event) and its first value otherwise (it was counting already).
 A **level** is read by its changes, holding its first value before its first point. Orchestra's
@@ -17,10 +18,11 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 
 from .. import hooks, metrics
+from ..output import declared_kinds
 from ..stores.kinds import kind_of
 
 EVENTS = "orchestra_events_total"
-HIDDEN = ("project", "command")       # labels never part of a series' identity in the model
+HIDDEN = ("project", "machine")       # labels never part of a series' identity in the model
 
 
 @dataclass
@@ -73,8 +75,8 @@ def sample(points: list[tuple[float, float]], start: float, step: float, n: int,
     return out
 
 
-def _counter(name: str, pts: list[tuple[float, float]]) -> bool:
-    if kind_of(name, {})[0] != "flow":
+def _counter(name: str, pts: list[tuple[float, float]], declared: dict[str, str]) -> bool:
+    if kind_of(name, declared)[0] != "flow":
         return False
     drops = sum(1 for (_, a), (_, b) in pairwise(pts) if b < a)
     return drops <= max(2, len(pts) // 100)
@@ -87,11 +89,12 @@ def gather(project, start: float, end: float, step: float) -> tuple[list[Series]
     left: dict[str, str] = {}
     errors: dict[str, str] = {}
     store = metrics.for_project(project)
+    declared = {k: "flow" if v == "counter" else "level" for k, v in declared_kinds(project).items()}
     for name, labels, pts in store.dump("", {"project": project.name}):
         pts = [(t, v) for t, v in pts if t <= end]
         if not pts:
             continue
-        counter = _counter(name, pts)
+        counter = _counter(name, pts, declared)
         ser = Series(name, dict(labels), pts, [], counter)
         if name.startswith("orchestra_") and name != EVENTS:
             left[ser.key] = "Orchestra's own series, not a measure of the system"

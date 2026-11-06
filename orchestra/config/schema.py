@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 REQ = {"required": True}
 DUR = {"duration": True}
 LIST = {"names": True}
-KINDS = ("agent", "decision", "program")
+KINDS = ("program", "agent", "decision")
+MODES = ("once", "continuous")
 
 
 @dataclass
@@ -35,23 +36,6 @@ class Store:
 
 
 @dataclass
-class MetricsCommand:
-    name: str = field(default="", metadata=REQ)
-    command: str = field(default="", metadata=REQ)
-    every: float = field(default=60.0, metadata=DUR)
-    timeout: float = field(default=30.0, metadata=DUR)
-
-
-@dataclass
-class EventsCommand:
-    name: str = field(default="", metadata=REQ)
-    command: str = field(default="", metadata=REQ)
-    every: float = field(default=60.0, metadata=DUR)
-    timeout: float = field(default=30.0, metadata=DUR)
-    continuous: bool = False
-
-
-@dataclass
 class Tool:
     name: str = field(default="", metadata=REQ)
     command: str = field(default="", metadata=REQ)
@@ -59,20 +43,20 @@ class Tool:
 
 
 @dataclass
-class Process:
+class Machine:
     name: str = field(default="", metadata=REQ)
-    kind: str = "agent"
-    prompt: str | None = None            # agent: the instructions file
+    kind: str = "program"
+    mode: str = "once"                   # once: one run per event or per tick; continuous: kept running
     command: str | None = None           # program: what to run
+    prompt: str | None = None            # agent: the instructions file
     question: str | None = None          # decision
     answers: list[str] = field(default_factory=list, metadata=LIST)
     inputs: list[str] = field(default_factory=list, metadata=LIST)
     min_confidence: float = 0.6
     on: list[str] = field(default_factory=list, metadata=LIST)
+    every: float | None = field(default=None, metadata=DUR)
     tools: list[str] | None = field(default=None, metadata=LIST)   # None: every tool
     model: str | None = None
-    every: float | None = field(default=None, metadata=DUR)
-    continuous: bool = False
     timeout: float = field(default=1200.0, metadata=DUR)
     per_day_usd: float = 10.0
 
@@ -101,10 +85,8 @@ class Config:
     bus: str = "file"
     metrics_store: str = "file"
     stores: list[Store] = field(default_factory=list)
-    metrics: list[MetricsCommand] = field(default_factory=list)
-    events: list[EventsCommand] = field(default_factory=list)
     tools: list[Tool] = field(default_factory=list)
-    processes: list[Process] = field(default_factory=list)
+    machines: list[Machine] = field(default_factory=list)
     agent: Agent = field(default_factory=Agent)
     items: list[Reducer] = field(default_factory=list)
     discovery: Discovery = field(default_factory=Discovery)
@@ -112,5 +94,5 @@ class Config:
     def tool(self, name: str) -> Tool | None:
         return next((t for t in self.tools if t.name == name), None)
 
-    def process(self, name: str) -> Process | None:
-        return next((p for p in self.processes if p.name == name), None)
+    def machine(self, name: str) -> Machine | None:
+        return next((m for m in self.machines if m.name == name), None)

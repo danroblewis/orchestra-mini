@@ -8,7 +8,7 @@ import sys
 def test_setup_runs_claude_with_the_brief_and_the_spec(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "orchestra.yaml").write_text("events:\n  - name: hello\n    command: ./hello.sh\n")
+    (repo / "orchestra.yaml").write_text("machines:\n  - name: hello\n    command: ./hello.sh\n    every: 1m\n")
     fake = tmp_path / "bin"
     fake.mkdir()
     (fake / "claude").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n')

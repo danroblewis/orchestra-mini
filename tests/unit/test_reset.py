@@ -9,7 +9,7 @@ def test_reset_clears_the_data_and_keeps_the_config(tmp_path):
     state = home / "repo"
     (state / "logs").mkdir(parents=True)
     for f in ("events.jsonl", "metrics.jsonl", "items.json", "orchestra.yaml", "web.token"):
-        (state / f).write_text("x\n" if f != "orchestra.yaml" else "events: []\n")
+        (state / f).write_text("x\n" if f != "orchestra.yaml" else "machines: []\n")
     (state / "scripts").mkdir()                       # the owner's: never removed
     (state / "scripts" / "github_events.py").write_text("print()\n")
     (state / "prompts.md").write_text("mine\n")

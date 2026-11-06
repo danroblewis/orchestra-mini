@@ -14,7 +14,8 @@ import yaml
 def make_project(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCHESTRA_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("ORCHESTRA_REPO", raising=False)
-    monkeypatch.delenv("ORCHESTRA_PROCESS", raising=False)
+    monkeypatch.delenv("ORCHESTRA_SOURCE", raising=False)
+    monkeypatch.delenv("ORCHESTRA_MACHINE", raising=False)
     monkeypatch.delenv("ORCHESTRA_BUS_URL", raising=False)
     monkeypatch.delenv("ORCHESTRA_METRICS_URL", raising=False)
     repo = tmp_path / "repo"
