@@ -7,7 +7,7 @@ import time
 from orchestra import runs
 from orchestra.cli import main
 from orchestra.events import Events, utc_time
-from orchestra.logcheck import collectors, large, projections, shapes, stamps_now
+from orchestra.logcheck import collectors, large, projections, shapes, stamps_now, truncated
 
 
 def fact(type, data=None, source="poller", subject="A-1", time="2026-11-05T10:00:00.000Z", recorded="2026-11-05T10:00:00.200Z"):
@@ -84,3 +84,33 @@ def test_query_check_says_nothing_to_report_or_each_finding(make_project, capsys
     assert main(["--repo", str(make_project.repo), "query", "check"]) == 0 and capsys.readouterr().out == "nothing to report\n"
     make_project({"machines": [{"name": "c", "command": "x", "every": "1m"}]})
     assert main(["--repo", str(make_project.repo), "query", "check"]) == 1 and "collector c: no runs yet" in capsys.readouterr().out
+
+
+def test_truncated_facts_are_reported():
+    facts = [{"type": "jira.issue.status_changed", "data": {"truncated": True}}, {"type": "jira.issue.status_changed", "data": {}}]
+    assert truncated(facts) == ["type jira.issue.status_changed: 1 facts say truncated: read the list to its end (page it), "
+                                "or say what was left out"]
+
+
+def test_views_built_step_by_step_are_checked_against_the_whole_log(make_project):
+    from orchestra.views.builder import Builder
+    counting = """import json, sys
+n = 0
+for line in sys.stdin:
+    f = json.loads(line); n += 1
+    print(json.dumps({"subject": f["subject"], "n": n}))
+"""
+    p = make_project({"projections": [{"name": "leaky", "match": "A-*", "command": "p/leaky.py"}]}, **{"p/leaky.py": counting})
+    ev = Events.for_project(p)
+    ev.publish("t.x.made", subject="A-1")
+    Builder(p).build()
+    ev.publish("t.x.made", subject="A-2")
+    Builder(p).build()
+    found = projections(p, [f | {"seq": i} for i, f in enumerate(ev.read(0)[0], 1)])
+    assert any(x.startswith("projection leaky: 1 views built step by step differ") for x in found), found
+
+
+def test_a_projection_whose_script_is_missing_stops_the_run(make_project):
+    from orchestra.check import problems
+    p = make_project({"projections": [{"name": "gone", "match": "A-*", "command": ".orchestra/projections/gone.py"}]})
+    assert ("error", "projection gone: .orchestra/projections/gone.py not found") in problems(p, stores=False)

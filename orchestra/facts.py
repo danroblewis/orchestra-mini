@@ -4,8 +4,11 @@ a projection, a machine or a query.
 It reads the bus in log order and gives each fact its ``seq``, its position in the log (the first
 fact is 1, so a projection built to the end has ``built_to`` equal to the log's length). It skips
 **repeats**: an observation (a type whose verb is ``observed``) whose ``data``, as canonical JSON,
-equals the previous fact's with the same subject, type and source. A repeat says nothing new, so
-nothing downstream ever sees one, whether or not the publisher caught it first.
+equals the previous fact's with the same subject, type and source. A repeat is not passed on, but
+it does say when the state was last seen unchanged: the next observation that differs gets
+``prevseen``, the time of the last repeat skipped before it, so a projection knows a change happened
+between ``prevseen`` and its ``time`` (the publisher stamps it when it skips the repeats itself, and
+this function when the repeats are on the log).
 
 ``depth`` past ``MAX_DEPTH`` is **held**: such a fact is recorded and read like any other, but no
 machine is given it (``held``)."""
@@ -43,6 +46,7 @@ class Repeats:
 
     def __init__(self):
         self.last: dict[tuple, str] = {}
+        self.still: dict[tuple, str] = {}            # the time of the last repeat skipped, by kind
 
     @staticmethod
     def key(fact: dict) -> tuple:
@@ -55,7 +59,14 @@ class Repeats:
         k, d = self.key(fact), digest(fact.get("data"))
         same = self.last.get(k) == d
         self.last[k] = d
+        if same and fact.get("time"):
+            self.still[k] = fact["time"]
         return same
+
+    def stamp(self, fact: dict) -> dict:
+        """An observation that is not a repeat, with ``prevseen`` when repeats were skipped before it."""
+        t = self.still.pop(self.key(fact), None) if observed(fact) else None
+        return fact | {"prevseen": t} if t and "prevseen" not in fact else fact
 
 
 class FactLog:
@@ -95,7 +106,7 @@ class FactLog:
                     if self.repeats.seen(ev):
                         self.skipped += 1
                         continue
-                    new.append(ev | {"seq": seq})
+                    new.append(self.repeats.stamp(ev) | {"seq": seq})
                 self.at = nxt
             self.facts += new
             return new

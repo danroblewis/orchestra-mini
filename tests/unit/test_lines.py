@@ -73,3 +73,14 @@ def test_the_publisher_skips_a_repeated_observation_and_stamps_recordedtime(tmp_
     told = '{"type": "ci.check.failed", "subject": "A-1", "data": {"k": 1}}'
     assert publish(pub, told, salt="6") and publish(pub, told, salt="7"), "only observations repeat"
     assert all(e["recordedtime"].endswith("Z") for e in events.read(0)[0])
+
+
+def test_the_publisher_stamps_prevseen_on_a_change_after_repeats(tmp_path):
+    events = Events(tmp_path / "e.jsonl")
+    pub = Publisher(events)
+    line = '{"type": "ci.branch.observed", "subject": "b", "time": "%s", "data": {"s": "%s"}}'
+    for i, (t, s) in enumerate((("2026-11-05T10:00:00Z", "red"), ("2026-11-05T10:01:00Z", "red"), ("2026-11-05T10:02:00Z", "green"))):
+        publish(pub, line % (t, s), salt=str(i))
+    kept = events.read(0)[0]
+    assert [e["data"]["s"] for e in kept] == ["red", "green"] and "prevseen" not in kept[0]
+    assert kept[1]["prevseen"] == "2026-11-05T10:01:00.000Z", "the change happened after the old state was last seen"

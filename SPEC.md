@@ -95,10 +95,13 @@ caused it, when the line knows better than Orchestra (section 3).
 `{"type": "orchestra.actor", "source": …, "data": {"name": …}}` names an actor for the pages.
 
 A **repeat** is an observation whose `data` (canonical JSON) equals the previous fact's with the
-same subject, type and source, in log order: it says nothing new. Publishing skips one when it can
-tell (counted as `repeats` on the run record), and every path by which facts reach a projection, a
-machine or a query skips any that got past, and gives each fact its `seq`, its position in the log.
-So a poller may print the whole current state on every run and keep no state of its own.
+same subject, type and source, in log order. Publishing skips one when it can tell (counted as
+`repeats` on the run record), and every path by which facts reach a projection, a machine or a
+query skips any that got past, and gives each fact its `seq`, its position in the log. So a poller
+may print the whole current state on every run and keep no state of its own. A repeat still says
+when the state was last seen unchanged: the next observation that differs carries `prevseen`, the
+time of the last repeat skipped before it, so the change happened between `prevseen` and its
+`time`.
 
 A measurement: `metric` (required, named for what it measures), `value` (required, a number),
 `labels`, `time` (RFC 3339 or Unix seconds; default now), `kind` (`counter` or `gauge`; default
@@ -275,7 +278,7 @@ longer prints is gone. A projection reads only its stdin (it is run with no envi
 every fact's `data`, the latest fact winning, `null` removing a key; `by_type`, the latest fact's
 `data` of each type; `type`, the latest fact's; `first` and `last`, the times of the first and latest
 facts; `kind` (section 2); `facts`, how many; `done`, true once the latest type's verb is
-`completed`, `closed` or `cancelled`. It orders by `time`, ties by `seq`, so history backfilled after
+`completed`, `closed`, `cancelled` or `merged`. It orders by `time`, ties by `seq`, so history backfilled after
 today's snapshot doesn't become the current state.
 
 **One builder, one lock.** Views are built by one function, under a file lock in the state directory,

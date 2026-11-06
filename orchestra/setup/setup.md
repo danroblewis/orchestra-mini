@@ -32,10 +32,11 @@ at, and are changed and rebuilt freely. Work in this order.
 2. **Find what is already set up** before asking for anything: environment variable names (never
    print values), `gh auth status`, CLIs on PATH, config files, the repository's own scripts and
    endpoints (a `/metrics` route, an `npm run` target). Ask only for what you cannot find, and only
-   in a sentence.
+   in a sentence. Learn a source from its API and its documentation, by calling it, never from
+   its implementation.
 3. **Collect each source's history as facts.** For each source, find its change history (Jira's
-   changelog, GitHub's timeline and reviews, git's log); prefer history to current state. Write a
-   collector (a machine with `every`) that prints one fact per change record:
+   changelog, GitHub's timeline and reviews, git's log). Write a collector (a machine with `every`)
+   that prints one fact per change record:
    - `id`: the source's own id for that record (`jira:ABC-123:history:9912`), so rerunning adds
      nothing;
    - `subject`: the source's own thing, named as it names it (`ABC-123`, `acme/api/pull/3`; GitHub
@@ -49,11 +50,25 @@ at, and are changed and rebuilt freely. Work in this order.
      over 4 KB, and saying so in `truncated`. Renaming and flattening belong in projections, shared
      through a helper module beside them (`.orchestra/projections/lib.py`).
 
-   A source with no history: print its current state as `<system>.<noun>.observed`, with no `id`
+   **Page every list** (a search, a changelog, a pull request's commits and reviews) to its end;
+   when the source says there are more than you fetched, put `truncated` in the fact's `data`.
+
+   **History rarely carries everything.** A thing's current state often has fields its history
+   doesn't (a pull request's head commit, its state, a title that can be edited), and a fact with
+   a stable id is never recorded twice, so an edit to it is lost. So also print each thing's
+   current state as `<system>.<noun>.observed`, beside its history, with the fields its history
+   lacks.
+
+   A source with no history at all: print its current state as `<system>.<noun>.observed`, with no `id`
    (an id from its content would drop a return to an earlier state) and without fields that change
    on every look (`updated`, `lastViewed`). Orchestra keeps only the changes, so the collector keeps
    no state of its own. A subject known only by observations never gets a `.closed` type; a
-   projection decides when it is `done`.
+   projection decides when it is `done`. Observations sample: a state shorter than the
+   collector's `every` may never be seen, and a change is known only to have happened between the
+   observation's `prevseen` (when the old state was last seen) and its `time`. Choose `every`
+   against the shortest state a question cares about, and say the limit in the report.
+
+   Name a subject so it is one thing whatever else is watched: `acme/api/branch/main`, not `main`.
 4. **Prove the facts.** Run each collector by hand and look at its stdout (an adapter:
    `echo '{"op": "health"}' | <command>`); run `orchestra run --seconds 30` twice (it checks the
    config first and refuses to start on an error: fix what it says). Read
@@ -61,9 +76,9 @@ at, and are changed and rebuilt freely. Work in this order.
    question needs is there; check `orchestra query metrics` for the measurements. Fix the
    collectors, not the facts' consumers, until it is so. Use the real systems, within the scope the
    owner gave.
-5. **Only now write the projections**, one per question, under `projections:`, the question as
-   the script's first comment (`.orchestra/projections/<name>.py`). Each reads facts on stdin and
-   prints one JSON line per subject (or, with `whole: true`, per key it chooses, for a question
+5. **Only now write the projections**, and only now list them under `projections:`: one per
+   question, the question as the script's first comment (`.orchestra/projections/<name>.py`).
+   Each reads facts on stdin and prints one JSON line per subject (or, with `whole: true`, per key it chooses, for a question
    across subjects: a join, a count per person); it reads only its stdin and prints times, not ages
    (`in_review_since`, not "2 days"). Test each on recorded facts:
    `orchestra query views NAME --input S | <command>`, then `orchestra query views NAME show S`.

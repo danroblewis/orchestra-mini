@@ -25,7 +25,7 @@ import time
 from . import exposition, lines
 from .counts import collapse
 from .events import event_time
-from .facts import held
+from .facts import held, observed
 from .metrics import Point
 
 PREFIX = "orchestra_"
@@ -176,7 +176,7 @@ class Output:
         self.skipped = self.skipped or bool(raw.get("skipped"))
 
     def publish(self, ev: dict) -> None:
-        restated = self.publisher.said(ev)
+        restated = not observed(ev) and self.publisher.said(ev)
         done = self.publisher.publish(ev)
         if done == lines.PUBLISHED:
             self.facts.append(ev)

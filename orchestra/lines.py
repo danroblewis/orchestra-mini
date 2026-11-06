@@ -117,6 +117,7 @@ class Publisher:
                 return DUPLICATE
             if self._repeats.seen(ev):
                 return REPEAT
+            ev.update(self._repeats.stamp(ev))
             ev["recordedtime"] = now()
             self.events.bus.append(ev)
             self._take(ev)

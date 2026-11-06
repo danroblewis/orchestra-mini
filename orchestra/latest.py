@@ -13,7 +13,7 @@ from __future__ import annotations
 from .events import event_time
 
 NAME = "latest"
-DONE = (".completed", ".closed", ".cancelled")
+DONE = (".completed", ".closed", ".cancelled", ".merged")
 
 
 def kind_of(facts: list[dict]) -> str | None:

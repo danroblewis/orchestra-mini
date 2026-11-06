@@ -47,6 +47,8 @@ def problems(project, stores: bool = True) -> list[tuple[str, str]]:
     out = []
     for m in project.config.machines:
         out += _command(project, f"machine {m.name}", m.command)
+    for p in project.config.projections:
+        out += _command(project, f"projection {p.name}", p.command)
     for s in project.config.stores:
         found = _command(project, f"store {s.name}", s.command)
         out += found

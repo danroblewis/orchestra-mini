@@ -49,3 +49,12 @@ def test_a_fact_log_reads_what_the_bus_gained(tmp_path):
 
 def test_held_is_past_the_depth_limit():
     assert held({"depth": 9}) and not held({"depth": 8}) and not held({}) and not held({"depth": True})
+
+
+def test_a_change_after_repeats_says_when_the_old_state_was_last_seen(tmp_path):
+    events = Events(tmp_path / "e.jsonl")
+    for t, status in (("10:00", "Open"), ("10:01", "Open"), ("10:02", "Open"), ("10:03", "Done"), ("10:04", "Open")):
+        put(events, "ci.branch.observed", {"status": status}, time=f"2026-11-05T{t}:00.000Z", id=f"o{t}")
+    facts = read(events)
+    assert [(f["data"]["status"], f.get("prevseen")) for f in facts] == [
+        ("Open", None), ("Done", "2026-11-05T10:02:00.000Z"), ("Open", None)], "only a change after skipped repeats carries it"

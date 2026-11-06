@@ -3,12 +3,13 @@
 - a source whose facts' ``time`` always equals ``recordedtime`` (it stamps now, not the source's
   time); observations, Orchestra's own types and the machines that react to facts (``on``) are
   left out, since their time is now;
-- ``data`` over 4 KB;
+- ``data`` over 4 KB, and facts whose ``data`` says ``truncated`` (a list not read to its end);
 - a type whose keys stopped appearing or newly appeared (the source changed its shape);
 - a collector (a machine with ``every``) silent for more than three of its ``every``, or whose
   last runs each added only facts the log already had;
 - each projection run twice over its facts: a missing or ``error`` view, or different bytes the
-  second time."""
+  second time; and its views as built step by step against the same views built from the whole
+  log (a projection that is right only when it sees everything at once)."""
 
 from __future__ import annotations
 
@@ -47,6 +48,33 @@ def large(facts: list[dict]) -> list[str]:
             by.setdefault(str(f.get("type")), []).append(n)
     return [f"type {t}: {len(ns)} facts with data over 4 KB (the largest {max(ns) // 1024} KB): leave out bodies and HTML, "
             "and say so in truncated" for t, ns in sorted(by.items())]
+
+
+def truncated(facts: list[dict]) -> list[str]:
+    by: dict[str, int] = {}
+    for f in facts:
+        if isinstance(f.get("data"), dict) and f["data"].get("truncated"):
+            by[str(f.get("type"))] = by.get(str(f.get("type")), 0) + 1
+    return [f"type {t}: {n} facts say truncated: read the list to its end (page it), or say what was left out"
+            for t, n in sorted(by.items())]
+
+
+META = ("behind", "error", "error_at")
+
+
+def stepwise(project, p, first: list[dict]) -> list[str]:
+    """The stored views (built step by step) against ``first`` (built from the whole log), when the
+    stored ones are up to date."""
+    from .views.builder import load
+    state = load(project, p.name)
+    if not state.get("build") or state.get("built_to") != Events.for_project(project).end():
+        return []
+    key = "key" if p.whole else "subject"
+    fresh = {str(o.get(key)): {k: v for k, v in o.items() if k not in META} for o in first}
+    kept = {k: {x: y for x, y in v.items() if x not in META} for k, v in state["views"].items()}
+    differ = sorted(k for k in fresh.keys() | kept.keys() if fresh.get(k) != kept.get(k))
+    return [f"projection {p.name}: {len(differ)} views built step by step differ from the same views built from the "
+            f"whole log (such as {differ[0]}): it must give each subject's view from that subject's facts alone"] if differ else []
 
 
 def shapes(facts: list[dict]) -> list[str]:
@@ -112,9 +140,11 @@ def projections(project, facts: list[dict]) -> list[str]:
         if json.dumps(first) != json.dumps(second):
             out.append(f"projection {p.name}: different views the second time over the same facts: it must read only its stdin "
                        "and print times, not ages")
+        else:
+            out += stepwise(project, p, first)
     return out
 
 
 def report(project) -> list[str]:
     facts = read(Events.for_project(project))
-    return stamps_now(project, facts) + large(facts) + shapes(facts) + collectors(project) + projections(project, facts)
+    return stamps_now(project, facts) + large(facts) + truncated(facts) + shapes(facts) + collectors(project) + projections(project, facts)
