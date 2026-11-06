@@ -57,17 +57,29 @@ levels:
   our envelope (`type: agent.session.entry`, `subject`: the session, `data`: the entry, with large
   tool results truncated to a hash and a pointer to the original file). They merge by union and
   never conflict, because nothing in them is shared.
-- **Named facts: classified from windows of that log.** A window (one turn, or one tool request
-  with its result and the reasoning before it) holds the request that started the work, the agent's
-  reasoning, the exact tool inputs and the results, test output included: intent and outcome
-  together. A cheap classifier (`orchestra decide`, with the fact catalogue as its closed list of
-  answers) names the fact; a program fills in its changeset; a check confirms it against an outcome
-  (the test failed before and passes after). The named fact points back to its evidence:
+- **Named facts: derived from the log by programs first, a classifier second.** The harness
+  records the exact before and after of every tool call (a hook that diffs the working tree, so an
+  edit made through the shell is caught too); a syntax-tree detector turns each diff into change
+  facts (`function_renamed`, `parameter_added`, `function_body_changed`, `test_added`); a checker
+  turns intent into work facts only against an outcome (the test failed on the baseline and passes
+  after). A cheap classifier over a window of the session (the request, the agent's reasoning, the
+  tool calls and results) adds what programs cannot: the *why*, and the windows no catalogue entry
+  fits. The named fact points back to its evidence:
+
+  Measured (`~/agent-facts-lab`, eight small coding tasks, Claude Code on Sonnet, $1.18 in all): the
+  detector over harness diffs recorded every catalogued change fact (precision and recall 1.00 on
+  seven tasks, 0.88/0.75 on the mixed one), including edits the agent made with `sed`. Haiku
+  classifying session windows alone was much worse (recall 0 to 0.75 by function; 13 of 14 change
+  facts by file, 1 of 8 work facts): an Edit window has no line context, so the function is lost, and
+  one window cannot show "failed before". Its real value was naming a fact the catalogue lacked
+  (`parameter_renamed`, from the agent's own words) and the reasoning to attach. So the classifier
+  is given the detector's facts and the window together, and is never the only source.
 
 ```jsonl
 {"type": "agent.session.entry", "subject": "session/7f3a", "source": "agent/worker-3", "id": "e41", "data": {"uuid": "e41", "parentUuid": "e40", "type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "src/inventory.py", "old_string": "…", "new_string": "…"}}]}}}
 {"type": "agent.session.entry", "subject": "session/7f3a", "source": "agent/worker-3", "id": "e42", "data": {"uuid": "e42", "parentUuid": "e41", "type": "user", "toolUseResult": {"sha256": "c09e…", "truncated": true}}}
-{"type": "code.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "classifier/v3", "caused_by": ["e38", "e41", "e42", "e45"], "data": {"by": "agent/worker-3", "confidence": 0.94, "checked": "failed before, passes after", "changed": ["demo/src/inventory.py::reserve"]}}
+{"type": "code.function_body_changed", "subject": "demo/src/inventory.py::reserve", "source": "detector/ast", "id": "c7", "caused_by": ["e41", "e42"], "data": {"lines_changed": 2}}
+{"type": "work.test_fixed", "subject": "demo/tests/test_inventory.py::test_reserve", "source": "checker", "caused_by": ["c7", "e38"], "data": {"by": "agent/worker-3", "failed_before": true, "passes_after": true, "why": "reserve compared the quantity to on_hand instead of on_hand - reserved"}}
 ```
 
 Two rules make derived facts safe in a CRDT:
@@ -79,7 +91,7 @@ Two rules make derived facts safe in a CRDT:
 2. **Facts that replay and facts that describe are different.** A `function_renamed` produced by a
    rename tool (or recognised exactly by a syntax-tree diff) can be applied again on top of someone
    else's change: a rename and a change to the same function's body commute, where text patches
-   conflict. A `test_fixed` classified from a session describes an edit made as text, and git still
+   conflict. A `test_fixed` derived from a session describes an edit made as text, and git still
    merges that text. So for code, derived facts mostly describe, and the merge of the code stays in
    git unless a fact replays. The CRDT's own territory is the shared record that is not code:
    items, claims, findings, statuses, the model.
@@ -134,7 +146,7 @@ Every field type merges on its own:
 | `Text` (later, only if needed) | character-level merge | a shared prose document |
 
 Facts are the only way to change an item, whoever produces them: a program printing them, a
-decision agent answering, or the classifier reading an agent's session. Each carries the version it
+decision agent answering, or the detector, checker and classifier reading an agent's session. Each carries the version it
 was based on:
 
 ```jsonl
@@ -290,7 +302,7 @@ approximation fits naturally on top: the facts are counts of discrete transition
 models.
 
 Nobody has to be begged to write flows, and with derived facts nobody has to be begged to emit them
-either: the agents work as they do, the classifier names what they did, and the counts of those
+either: the agents work as they do, programs and a classifier name what they did, and the counts of those
 facts are the flows, merged facts on main for the system, branch facts for the agents themselves
 (attempts, abandoned branches, rework).
 
@@ -303,8 +315,10 @@ facts are the flows, merged facts on main for the system, branch facts for the a
   Log and Counter (Text is a library, pycrdt, if ever needed), plus validation of `requires` and the
   base-version bookkeeping.
 - **Facts must be named well, and now that is measurable.** A bad model (a fact called `updated`
-  that sets everything) brings back the snapshot problems. With a classifier, a missing name shows
-  up directly as a high rate of `other`, on the windows that need one.
+  that sets everything) brings back the snapshot problems. A missing name shows up directly: as a
+  rate of `other`, and as checked claims rejected for want of a fact (in the lab, a correct
+  parameter rename was recorded as a removal plus an addition, and the agent's true claim
+  rejected).
 - **A wrong classification is a wrong fact that merges cleanly.** Hence a confidence threshold
   (below it, the window stays raw events), a check against an outcome wherever one exists, and the
   raw events kept so facts can be derived again and corrected.
@@ -321,8 +335,9 @@ facts are the flows, merged facts on main for the system, branch facts for the a
 
 1. The type menu and generic merge in Orchestra, driven by a model's JSON Schema.
 2. Facts with `base` versions; rejection by `requires`, recorded as events.
-3. Session logs ingested as wrapped entries, and a classifier processor that turns windows into
-   named facts with `caused_by`, its version and confidence, checked against outcomes.
+3. Session logs ingested as wrapped entries; harness diffs per tool call; a syntax-tree detector
+   for change facts, a checker for work facts, and a classifier for the why and the gaps, each fact
+   with `caused_by`.
 4. Delivery of an item's new facts to running processors working on it (deltas on stdin).
 5. Branch streams, and classification of the net change at merge.
 6. Claims with leases, as a `Map` type, for work allocation without a scheduler.
