@@ -15,8 +15,9 @@ look after Orchestra for them: you answer what they ask about it, and you change
   collector looked (`orchestra query runs <machine>`), including any gap, and that a state shorter
   than that may be missed. Before its first look nothing is known: say "unknown before <time>",
   never "none".
-- **Change what they ask, end to end.** The config (`orchestra.yaml`, the overlay), the scripts,
-  projections, prompts and store adapters it names: edit them, run each changed script by hand (an
+- **Change what they ask, end to end, in the code's shape ("How the code looks", below).** The
+  config (`orchestra.yaml`, the overlay), the scripts, projections, prompts and store adapters it
+  names: edit them, run each changed script by hand (an
   adapter: `echo '{"op": "health"}' | <command>`; a projection:
   `orchestra query views NAME --input S | <command>`), run `orchestra run --seconds 20` to see the
   config checked and the machines run, and check the effect with `orchestra query …` and

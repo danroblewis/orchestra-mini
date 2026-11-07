@@ -42,7 +42,7 @@ stores:                            # other stores, read in place through an adap
 
 machines:                          # what Orchestra runs (section 3)
   - name: github                   # pull requests, reviews and checks as facts
-    command: .orchestra/scripts/github.py
+    command: .orchestra/github.py
     every: 2m
   - name: ci_triage                # a red check: caused by the change, or flaky?
     command: orchestra decide "Is this failure caused by the change?" --answers real,flaky --inputs title,log_tail
@@ -55,14 +55,14 @@ machines:                          # what Orchestra runs (section 3)
     on: [github.pr.review_requested, github.pr.commented]
     continuous: true
   - name: deploys                  # a program kept running: follows the deploy log
-    command: .orchestra/scripts/deploy_tail.py
+    command: .orchestra/deploy_tail.py
     continuous: true
     env: {DEPLOY_ENV: prod}
 
 projections:                       # what is looked at, built from the facts (section 6)
   - name: review                   # Which pull requests wait on a review, since when?
     match: "acme/api/pull/*"
-    command: .orchestra/projections/review.py
+    command: .orchestra/review.py
 ```
 
 Also optional: `discovery: {every: 5m, window: 60m}` (section 7).
@@ -259,12 +259,12 @@ logged, so the log holds only facts.
 projections:
   - name: ticket                     # Where is each ticket, and who has it?
     match: "ABC-*"                   # subject glob, or a list of them
-    command: .orchestra/projections/ticket.py
+    command: .orchestra/ticket.py
   - name: ticket_prs                 # Which tickets have an approved pull request?
     match: ["ABC-*", "acme/api/pull/*"]
     types: ["jira.issue.*", "github.pr.*"]   # optional: only these reach it
     whole: true                      # reads every matching fact on each build
-    command: .orchestra/projections/ticket_prs.py
+    command: .orchestra/ticket_prs.py
 ```
 
 Each build is one run of the command. Its stdin is every fact of the subjects being built (all
@@ -286,8 +286,8 @@ today's snapshot doesn't become the current state.
 **One builder, one lock.** Views are built by one function, under a file lock in the state directory,
 each run of a projection under a 60 s timeout that kills its process group. Each projection's views
 are kept in `views/<name>.json` with `built_to` (the last `seq` built) and the projection's hash: its
-entry, every file in the folder of the script `command` names (none for an inline command), and
-Orchestra's version. A changed hash rebuilds it from the log; `orchestra query views --rebuild`
+entry, the script `command` names and the modules beside it that it imports (none for an inline
+command), and Orchestra's version. A changed hash rebuilds it from the log; `orchestra query views --rebuild`
 forces it. `orchestra run` builds after each batch of facts; a page or `query` builds only when no
 runner is alive. Every view carries `behind`: how many matching facts have a `seq` past `built_to`
 (for a per-subject view, its subject's only). Routing facts to machines never waits for a build, and

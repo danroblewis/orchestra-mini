@@ -11,6 +11,7 @@ import time
 from orchestra.events import Events
 from orchestra.views import Builder, Views, said
 from orchestra.views.builder import locked
+from orchestra.views.run import hash_of
 
 COUNT = """
 import json, sys
@@ -68,10 +69,14 @@ def test_per_subject_views_are_refolded_only_for_subjects_with_new_facts(make_pr
 
 def test_a_changed_projection_is_rebuilt_from_the_log(make_project):
     p = project_with(make_project, [{"name": "count", "match": "T-*", "command": "projections/count.py"}],
-                     **{"projections/count.py": COUNT, "projections/lib.py": "X = 1\n"})
+                     **{"projections/count.py": "import lib\n" + COUNT, "projections/lib.py": "X = 1\n",
+                        "projections/collector.py": "Y = 1\n"})
     put(p, "t.task.made", "T-1")
     Builder(p).build()
-    (p.repo / "projections" / "lib.py").write_text("X = 2\n")             # a helper beside it changed: its hash did
+    (p.repo / "projections" / "collector.py").write_text("Y = 2\n")       # a script it doesn't import: no rebuild
+    assert Builder(p).build()["count"]["hash"] == hash_of(p, p.config.projections[0])
+    assert (p.repo / "runs.log").read_text().splitlines() == ["T-1"]
+    (p.repo / "projections" / "lib.py").write_text("X = 2\n")             # a module it imports changed: its hash did
     put(p, "t.task.made", "T-2")
     Builder(p).build()
     assert (p.repo / "runs.log").read_text().splitlines() == ["T-1", "T-1 T-2"], "rebuilt: every subject again"

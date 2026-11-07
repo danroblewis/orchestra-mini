@@ -14,8 +14,8 @@ Turn what the owner wants Orchestra to see and do into a working setup:
 - `orchestra.yaml`: readable, short, with a comment on each entry saying what it is for. Leave out
   every field whose default is right. The owner must be able to read and edit it by hand.
 - The scripts its machines run, the projections it lists, the prompt files `orchestra agent` names,
-  and any store adapter it needs: small, plain, each runnable on its own, using no Orchestra library
-  (stdin and stdout are the interface, SPEC §2, §4 and §6).
+  and any store adapter it needs, using no Orchestra library (stdin and stdout are the interface,
+  SPEC §2, §4 and §6), written as "How the code looks" says, below.
 
 ## How to work
 
@@ -25,7 +25,7 @@ at, and are changed and rebuilt freely. Work in this order.
 1. **Ask for the questions.** Ask the owner for 2 to 4 questions Orchestra must answer, in their
    words ("which pull requests wait on a review, and since when?"), which systems to watch, and
    where the files should live: in the repository (default: `orchestra.yaml` at the root, scripts,
-   projections and prompts under `.orchestra/`) or kept out of it (the overlay in the state
+   projections, the kit and prompts under `.orchestra/`) or kept out of it (the overlay in the state
    directory, with the scripts beside it). One short exchange, then work. Collect every system the
    owner names, its history and its current state, even when no question needs it yet: a later
    question can only be answered from what was collected, and a source with no history can never
@@ -54,7 +54,7 @@ at, and are changed and rebuilt freely. Work in this order.
      record's time (never a field of the thing's current state). Leave out bodies, HTML and
      anything over 4 KB, and list what you left out in `omitted` (`["body"]`); keep short text
      such as a commit message, which often names a ticket. Renaming and flattening belong in
-     projections, shared through a helper module beside them (`.orchestra/projections/lib.py`).
+     projections, shared through the kit or a module beside them.
 
    **Page every list** (a search, a changelog, a pull request's commits and reviews) to its end;
    when the source says there are more than you fetched, put `truncated: true` in the fact's
@@ -87,7 +87,7 @@ at, and are changed and rebuilt freely. Work in this order.
    edited), fix the collector, clear the data with the reset command under "This project now",
    and collect again, so the owner starts from facts that are right.
 5. **Only now write the projections**, and only now list them under `projections:`: one per
-   question, the question as the script's first comment (`.orchestra/projections/<name>.py`).
+   question, the question as the script's docstring (`.orchestra/<name>.py`).
    Each reads facts on stdin and prints one JSON line per subject (or, with `whole: true`, per key
    it chooses, for a question across subjects: a join, a count per person); it reads only its stdin and prints times, not ages
    (`in_review_since`, not "2 days"). Test each on recorded facts:

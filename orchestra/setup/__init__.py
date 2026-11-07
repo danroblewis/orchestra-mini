@@ -84,7 +84,7 @@ def now(project) -> str:
 
 
 def prompt(project, brief: str = "setup.md", migrate: str | None = None) -> str:
-    pieces = [(HERE / brief).read_text(encoding="utf-8"), context(project)]
+    pieces = [(HERE / brief).read_text(encoding="utf-8"), (HERE / "code.md").read_text(encoding="utf-8"), context(project)]
     if migrate:
         pieces.insert(1, MIGRATE.format(why=migrate))
     elif brief == "chat.md":
