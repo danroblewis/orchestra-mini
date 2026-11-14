@@ -243,24 +243,12 @@ itself, and keeps running until its stdin closes. Try it by hand:
 
 The bus counter keeps its name, `orchestra_events_total`, and counts facts.
 
-Pages, read only but for one box: **Dashboard** (a box for a task, what waits on the owner, open
-items, recent runs, spend),
+Pages, read only: **Dashboard** (what waits on the owner, open items, recent runs, spend),
 **Items** (each item's facts and views), **Machines** (every machine and source, what each
 publishes and listens for, runs), **Dynamics** (the model), **Core** (bus, metrics store, stores,
 machines, each projection's last build, held facts: health and recent errors). The Dashboard and
 Items take `waiting_on` and `done` from an item's first view, in config order, that has the key
 at its top level, else from `latest` (`fields.waiting_on`, `done`).
-
-**Tasks.** The Dashboard's box is how the owner asks for work with no config at all. What they type
-becomes one fact from source `owner`: `owner.task.requested` on a new item `task/<id>`, with
-`data` `text`, `title` (its first line) and `waiting_on: worker`. A task's page has a box for a reply,
-`owner.task.replied` on the same item. The built-in machine `worker` (`orchestra agent` with
-the packaged `orchestra/tasks/worker.md`) listens for both, unless the config names a machine
-`worker` of its own: it does the task in the repository, commits what it changed (never pushes),
-and says `worker.task.completed` (`summary`, `commits`, `waiting_on: null`), `worker.task.asked`
-(`question`, `waiting_on: owner`) or `worker.task.failed` (`why`, `waiting_on: owner`). A question
-or a failure shows under Waiting on you. `POST /tasks` (form `text`, and `subject` for a reply) is
-the only POST besides `/login` and `/logout`.
 
 ## 6. Projections and views
 

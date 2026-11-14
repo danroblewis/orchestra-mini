@@ -1,7 +1,6 @@
 """The pages' HTTP server (stdlib): every route but ``/health``, ``/login`` and ``/static/`` needs the
 login (``auth``); a browser without it is sent to ``/login``, a program gets 401. ``/api/<page>``
-returns a page's data as JSON. Read only, but for the owner's tasks: the only POSTs are ``/login``,
-``/logout`` and ``/tasks`` (a task asked for, or a reply on one: one fact from ``owner``)."""
+returns a page's data as JSON. Read only: the only POSTs are ``/login`` and ``/logout``."""
 
 from __future__ import annotations
 
@@ -12,14 +11,11 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .. import tasks
-from ..lines import Publisher, fact
 from . import data, pages
 from .auth import SESSION_S, Failures, Secret, cookie_name, safe_next, same_origin
 
 STATIC = Path(__file__).parent / "static"
 LOGIN_BODY_MAX = 8192
-TASK_BODY_MAX = 65536
 
 
 def _int(q: dict, k: str, default: int = 0) -> int:
@@ -136,8 +132,6 @@ def handler(project):
                 return self._json(403, {"error": "refused: not sent from this site's own pages"})
             if u.path == "/logout":
                 return self._send(303, "", headers={"Location": "/login", "Set-Cookie": self._cookie("", 0)})
-            if u.path == "/tasks":
-                return self._task()
             if u.path != "/login":
                 return self._json(405, {"error": "the pages are read only"})
             n = int(self.headers.get("Content-Length") or 0)
@@ -149,24 +143,5 @@ def handler(project):
                 failures.fail(self._peer())
                 return self._send(401, pages.login(nxt, "That is not this project's token."))
             self._send(303, "", headers={"Location": nxt, "Set-Cookie": self._cookie(secret.session(), SESSION_S)})
-
-        def _task(self):
-            """A task asked for (no ``subject``) or a reply on one, as the owner: one fact, then the task's page."""
-            ok = self._authorized()
-            if not ok:
-                return self._json(429 if ok is None else 401, {"error": "log in first"})
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > TASK_BODY_MAX:
-                return self._json(413, {"error": f"at most {TASK_BODY_MAX} bytes"})
-            form = parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
-            raw, why = tasks.request((form.get("text") or [""])[0], (form.get("subject") or [None])[0])
-            if raw is None:
-                back = (form.get("subject") or [None])[0]
-                return self._send(400, pages.layout(project, "/", "Not sent", f"<p class=bad>{pages.e(why)}</p>"
-                                                    f'<p><a href="{pages.task_href(back)}">back</a></p>'))
-            import uuid
-            ev, why = fact(raw, "owner", uuid.uuid4().hex)
-            Publisher.for_project(project).publish(ev)
-            self._send(303, "", headers={"Location": pages.task_href(ev["subject"])})
 
     return Handler

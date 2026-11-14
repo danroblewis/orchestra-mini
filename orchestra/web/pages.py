@@ -44,26 +44,13 @@ def item_link(subject: str) -> str:
     return f'<a href="/items?show={quote(subject, safe="")}">{e(subject)}</a>'
 
 
-def task_href(subject: str | None) -> str:
-    return f"/items?show={quote(subject, safe='')}" if subject else "/"
-
-
-def ask(subject: str | None = None) -> str:
-    """The box: a new task on the Dashboard, a reply on a task's page."""
-    hidden = f'<input type="hidden" name="subject" value="{e(subject)}">' if subject else ""
-    label, button = ("Reply", "Send reply") if subject else ("What do you want done?", "Do it")
-    return (f'<form class="ask" method="post" action="/tasks">{hidden}<label for="ask">{label}</label>'
-            f'<textarea id="ask" name="text" rows="3" required placeholder="{"" if subject else "Add a README that says what this project is"}"></textarea>'
-            f'<button>{button}</button></form>')
-
-
 def dashboard(d: dict) -> str:
     waiting = table(["item", "title", "latest", "when"], [[item_link(i["subject"]), e(i["title"]), e(i["type"]), when(i["last"])]
                                                               for i in d["waiting"]], "nothing waits on you")
     opened = table(["item", "latest", "when", "waits on"], [[item_link(i["subject"]), e(i["type"]), when(i["last"]),
                                                                e(i["waiting_on"])] for i in d["recent_open"]], "no open items")
     spent = ", ".join(f"{e(k)} ${v:.2f}" for k, v in d["spent_by"].items() if v) or "nothing"
-    return (f'<section>{ask()}</section><section><h2>Waiting on you</h2>{waiting}</section>'
+    return (f'<section><h2>Waiting on you</h2>{waiting}</section>'
             f'<section><h2>Open items ({d["open"]})</h2>{opened}<p><a href="/items">all items</a></p></section>'
             f'<section><h2>Recent runs</h2>{runs_table(d["runs"])}</section>'
             f'<section><h2>Spend today</h2><p class="big">${d["spent_today"]:.2f}</p><p class="quiet">{spent}</p></section>')
@@ -130,9 +117,8 @@ def item(s: dict) -> str:
     views = "".join(_view(name, v) for name, v in s["views"].items() if name != "latest")
     fields = table(["field", "value"], [[e(k), f"<code>{e(json.dumps(v))}</code>"] for k, v in sorted((base.get("fields") or {}).items())],
                    "no fields")
-    reply = f"<section>{ask(s['subject'])}</section>" if s["subject"].startswith("task/") else ""
     return (f'<p><b>{e(base.get("kind") or "")}</b> · {"done" if s["done"] else "open"} · latest {e(base.get("type"))} '
-            f'at {when(base.get("last"))}</p>{waits}{reply}{views}'
+            f'at {when(base.get("last"))}</p>{waits}{views}'
             f'<section><h2>latest</h2>{fields}</section><section><h2>Facts</h2>{hist}</section>'
             '<p><a href="/items">all items</a></p>')
 

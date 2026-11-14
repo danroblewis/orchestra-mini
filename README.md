@@ -32,8 +32,7 @@ discovers a **system dynamics model** (from the metrics).
    predictions judged against the metrics.
 
 People use one config file (machines, projections and stores), four commands (`run`, `chat`, `emit`, `query`) and
-read-only pages, but for one box: on the Dashboard, type what you want done and the built-in `worker`
-(an agent) does it in the repository and commits it. That needs no config. The details are [SPEC.md](SPEC.md).
+read-only pages. The details are [SPEC.md](SPEC.md).
 
 ## Install
 
