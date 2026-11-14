@@ -16,7 +16,8 @@ def test_defaults_with_no_file(make_project):
     p = load(make_project.repo)
     assert p.name == "repo" and p.files == []
     c = p.config
-    assert (c.bus, c.metrics_store, c.discovery.every, c.discovery.window, c.machines, c.stores) == ("file", "file", 300, 3600, [], [])
+    assert (c.bus, c.metrics_store, c.discovery.every, c.discovery.window, c.stores) == ("file", "file", 300, 3600, [])
+    assert [m.name for m in c.machines] == ["worker"]       # the built-in one, for the owner's tasks
 
 
 def test_a_machine_is_four_fields():
@@ -46,7 +47,7 @@ def test_overlay_merges_maps_and_named_lists(make_project):
     overlay.write_text(json.dumps({"discovery": {"every": "1m"},
                                    "machines": [{"name": "m", "enabled": False}, {"name": "n", "command": "Y", "on": "a"}]}))
     p = load(make_project.repo)
-    assert [(m.name, m.command) for m in p.config.machines] == [("n", "Y"), ("o", "z")]
+    assert [(m.name, m.command) for m in p.config.machines if m.name != "worker"] == [("n", "Y"), ("o", "z")]
     assert p.config.discovery.every == 60 and p.config.discovery.window == 3600 and len(p.files) == 2
 
 
@@ -120,7 +121,7 @@ def test_durations(text, seconds):
 def test_on_is_a_key_not_a_boolean(make_project):
     (make_project.repo / "orchestra.yaml").write_text(
         "machines:\n  - name: w\n    command: orchestra agent w.md --model yes\n    on: [a.b.c]\n    continuous: true\n")
-    (w,) = load(make_project.repo).config.machines
+    w, _worker = load(make_project.repo).config.machines
     assert w.on == ["a.b.c"] and w.continuous is True and w.command.endswith("--model yes")
 
 

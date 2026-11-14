@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import Config, build_config, home, layers
 from .config.load import find
+from .tasks import with_builtin
 
 
 @dataclass
@@ -43,4 +44,6 @@ def repo_root(start: Path | None = None) -> Path:
 def load(repo: Path | None = None) -> Project:
     root = Path(repo).resolve() if repo else repo_root()
     name, files, raw = layers(root)
-    return Project(name, root, build_config(raw), files)
+    cfg = build_config(raw)
+    cfg.machines = with_builtin(cfg.machines)
+    return Project(name, root, cfg, files)

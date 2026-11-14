@@ -138,3 +138,23 @@ def test_the_pages_are_read_only(site):
     assert ask(port, "/subjects", "POST", h, "")[0] == 405
     status, hh, _ = ask(port, "/logout", "POST", h, "")
     assert status == 303 and "Max-Age=0" in hh["Set-Cookie"]
+
+
+def test_the_owner_asks_for_a_task_and_replies_on_it(site):
+    p, port = site
+    h = login(p, port)
+    assert 'action="/tasks"' in ask(port, "/", headers=h)[2]
+    form = h | {"Content-Type": "application/x-www-form-urlencoded"}
+    assert ask(port, "/tasks", "POST", {"Content-Type": "application/x-www-form-urlencoded"}, "text=hi")[0] == 401
+    assert ask(port, "/tasks", "POST", form | {"Origin": "http://elsewhere.example"}, "text=hi")[0] == 403
+    assert ask(port, "/tasks", "POST", form, "text=+++")[0] == 400
+    status, hh, _ = ask(port, "/tasks", "POST", form, "text=Add+a+README")
+    assert status == 303 and hh["Location"].startswith("/subjects?show=task%2F")
+    subject = hh["Location"].split("show=")[1].replace("%2F", "/")
+    (asked,) = [f for f in Events.for_project(p).all(0) if f.get("subject") == subject]
+    assert asked["type"] == "owner.task.requested" and asked["source"] == "owner" and asked["data"]["text"] == "Add a README"
+    page = ask(port, hh["Location"], headers=h)[2]
+    assert "Send reply" in page and "Add a README" in page
+    assert ask(port, "/tasks", "POST", form, f"text=yes&subject={subject}")[0] == 303
+    assert ask(port, "/tasks", "POST", form, "text=yes&subject=ABC-1")[0] == 400
+    assert [f["type"] for f in Events.for_project(p).all(0) if f.get("subject") == subject] == ["owner.task.requested", "owner.task.replied"]
