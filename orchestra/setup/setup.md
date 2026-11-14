@@ -42,7 +42,7 @@ at, and are changed and rebuilt freely. Work in this order.
    - `id`: the source's own id for that record (`jira:ABC-123:history:9912`), so rerunning adds
      nothing;
    - `subject`: the source's own thing, named as it names it (`ABC-123`, `acme/api/pull/3`; GitHub
-     numbers issues and pull requests from one sequence). The subject is the one modelling choice
+     numbers issues and pull requests from one sequence). The item is the one modelling choice
      made before data exists; other things a fact concerns (the reviewer, the commit, a ticket a
      pull request mentions) go in `data` by their ids, so a projection can join them later;
    - `type`: `<system>.<noun>.<verb>` (`jira.issue.status_changed`, `github.pr.reviewed`);
@@ -69,18 +69,18 @@ at, and are changed and rebuilt freely. Work in this order.
    A source with no history at all: print its current state as `<system>.<noun>.observed`, with no `id`
    (an id from its content would drop a return to an earlier state) and without fields that change
    on every look (`updated`, `lastViewed`). Orchestra keeps only the changes, so the collector keeps
-   no state of its own. A subject known only by observations never gets a `.closed` type; a
+   no state of its own. An item known only by observations never gets a `.closed` type; a
    projection decides when it is `done`. Observations sample: a state shorter than the
    collector's `every` may never be seen, and a change is known only to have happened between the
    observation's `prevseen` (when the old state was last seen) and its `time`. Before choosing
    `every`, watch the source for a few minutes to see how long its states last, choose `every`
    below the shortest one a question cares about, and say the limit in the report.
 
-   Name a subject so it is one thing whatever else is watched: `acme/api/branch/main`, not `main`.
+   Name an item so it is one thing whatever else is watched: `acme/api/branch/main`, not `main`.
 4. **Prove the facts.** Run each collector by hand and look at its stdout (an adapter:
    `echo '{"op": "health"}' | <command>`); run `orchestra run --seconds 30` twice (it checks the
    config first and refuses to start on an error: fix what it says). Read
-   `orchestra query facts --subject S` for three real subjects and check that every field a
+   `orchestra query facts --subject S` for three real items and check that every field a
    question needs is there; check `orchestra query metrics` for the measurements. Fix the
    collectors, not the facts' consumers, until it is so. Use the real systems, within the scope the
    owner gave. Until you report, the log is yours: when a fact was recorded wrong (a fact is never
@@ -88,8 +88,8 @@ at, and are changed and rebuilt freely. Work in this order.
    and collect again, so the owner starts from facts that are right.
 5. **Only now write the projections**, and only now list them under `projections:`: one per
    question, the question as the script's docstring (`.orchestra/<name>.py`).
-   Each reads facts on stdin and prints one JSON line per subject (or, with `whole: true`, per key
-   it chooses, for a question across subjects: a join, a count per person); it reads only its stdin and prints times, not ages
+   Each reads facts on stdin and prints one JSON line per item (or, with `whole: true`, per key
+   it chooses, for a question across items: a join, a count per person); it reads only its stdin and prints times, not ages
    (`in_review_since`, not "2 days"). Test each on recorded facts:
    `orchestra query views NAME --input S | <command>`, then `orchestra query views NAME show S`.
    Prefer a new projection to a changed fact; when a fact's shape must change, give it a new type

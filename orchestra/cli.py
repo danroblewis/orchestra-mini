@@ -141,7 +141,7 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("emit", help="publish one fact, or write one metric line, as ORCHESTRA_SOURCE")
     s.add_argument("json")
     s.set_defaults(fn=cmd_emit)
-    s = sub.add_parser("query", help="facts | views | check | metrics | model | runs | '<promql>' [--store NAME]",
+    s = sub.add_parser("query", help="facts | views (or items) | check | metrics | model | runs | '<promql>' [--store NAME]",
                        description="orchestra query facts [-n N] [--type T] [--subject S] [--trace ID]\n"
                                    "orchestra query views [PROJECTION] [show SUBJECT] [--input SUBJECT] [--rebuild]\n"
                                    "orchestra query check\n"

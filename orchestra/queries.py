@@ -13,7 +13,7 @@ from .events import Events
 from .facts import read
 from .views import Builder, Views, projections, said
 
-GONE = {"events": "facts", "items": "views"}
+GONE = {"events": "facts"}
 
 
 def trace(facts: list[dict], fact_id: str) -> list[dict]:
@@ -173,7 +173,7 @@ def q_promql(project, promql: str, rest) -> int:
     return 0
 
 
-QUERIES = {"facts": q_facts, "views": q_views, "check": q_check, "metrics": q_metrics, "model": q_model, "runs": q_runs}
+QUERIES = {"facts": q_facts, "views": q_views, "items": q_views, "check": q_check, "metrics": q_metrics, "model": q_model, "runs": q_runs}
 
 
 def query(project, what: str, rest: list[str]) -> int:

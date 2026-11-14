@@ -47,7 +47,7 @@ PER_KIND = 10                # the overview shows this many of each kind; the ki
 
 
 def _columns(found: list[dict]) -> list[str]:
-    """The fields most of a kind's subjects have (besides title and waiting_on), commonest first."""
+    """The fields most of a kind's items have (besides title and waiting_on), commonest first."""
     seen: dict[str, int] = {}
     for v in found:
         for k, x in (v.get("fields") or {}).items():
@@ -63,8 +63,8 @@ def _row(v: dict, views: dict, cols: list[str]) -> dict:
         "values": [f.get(c) for c in cols], "facts": v.get("facts", 0)}
 
 
-def subjects(project, page: int = 0, n: int = 25, closed: bool = False, kind: str | None = None) -> dict:
-    """One table per kind (the overview: the newest of each), or one kind's subjects, paged."""
+def items(project, page: int = 0, n: int = 25, closed: bool = False, kind: str | None = None) -> dict:
+    """One table per kind (the overview: the newest of each), or one kind's items, paged."""
     views = Views(project)
     found = views.latest(closed=closed, kind=kind)
     groups = []
@@ -80,11 +80,11 @@ def subjects(project, page: int = 0, n: int = 25, closed: bool = False, kind: st
         cols = _columns(by[k])
         rows = by[k][page * n:(page + 1) * n] if kind else by[k][:PER_KIND]
         groups.append({"kind": k, "total": len(by[k]), "columns": cols,
-                       "subjects": [_row(v, views.of_cached(v["subject"]), cols) for v in rows]})
+                       "items": [_row(v, views.of_cached(v["subject"]), cols) for v in rows]})
     return {"groups": groups, "page": page, "n": n, "total": len(found), "closed": closed, "kind": kind, "kinds": views.kinds()}
 
 
-def subject(project, name: str) -> dict | None:
+def item(project, name: str) -> dict | None:
     """A subject's facts and its views."""
     views = Views(project)
     found = views.of(name)

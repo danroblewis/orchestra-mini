@@ -14,13 +14,13 @@ discovers a **system dynamics model** (from the metrics).
    `type` is required. Orchestra fills the rest, drops an id it has seen, skips a repeated
    observation, and stamps the envelope with `causedby`, `depth` and `recordedtime`.
 2. **A metric line**: `{"metric", "labels", "value", "time"}` (Prometheus text is accepted too).
-3. **A projection**: `name`, `match` (subject globs), `command`, and optionally `types` and
-   `whole: true`. Its command reads the facts of the subjects being built on stdin, in log order,
-   and prints one view per subject (`{"subject": …}`), or per key it chooses when whole
-   (`{"key": …}`). Views are rebuilt, never logged. The built-in `latest` covers every subject:
+3. **A projection**: `name`, `match` (item globs), `command`, and optionally `types` and
+   `whole: true`. Its command reads the facts of the items being built on stdin, in log order,
+   and prints one view per item (`{"subject": …}`), or per key it chooses when whole
+   (`{"key": …}`). Views are rebuilt, never logged. The built-in `latest` covers every item:
    the latest value of each `data` key by time, the latest `data` of each type, and `done`.
 4. **A machine**: `name`, `command`, and when it runs: `on:` fact types, `every:`, or
-   `continuous: true`. A once run gets its fact on stdin, then stdin closes, and its subject's
+   `continuous: true`. A once run gets its fact on stdin, then stdin closes, and its item's
    views in the file `ORCHESTRA_VIEWS_FILE`; a continuous one keeps stdin open. What it writes is
    stamped with the fact that caused it. Agents and decisions are machines too, through the
    built-in programs `orchestra agent` and `orchestra decide`.

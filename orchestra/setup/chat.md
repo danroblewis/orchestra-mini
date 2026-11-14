@@ -25,7 +25,7 @@ look after Orchestra for them: you answer what they ask about it, and you change
   from the facts, never a change to what collectors write; a fact whose shape must change gets a
   new type (`….v2`). A running `orchestra run` reads its config only at start: say when it needs a
   restart.
-- **Notice what is wrong.** A machine whose runs fail, a subject stuck, a projection with `error`
+- **Notice what is wrong.** A machine whose runs fail, an item stuck, a projection with `error`
   views, held facts (a loop among machines), a store near its daily cap, an agent spending more
   than it should: say it in a line and offer the fix, or fix it if they asked you to keep things
   working.

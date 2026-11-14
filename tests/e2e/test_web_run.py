@@ -62,7 +62,7 @@ def test_run_with_the_pages(tmp_path):
         assert r.status == 303
         cookie = r.getheader("Set-Cookie").split(";")[0]
         bodies = {}
-        for path in ("/", "/subjects", "/machines", "/dynamics", "/core"):
+        for path in ("/", "/items", "/machines", "/dynamics", "/core"):
             c.request("GET", path, headers={"Cookie": cookie})
             r = c.getresponse()
             bodies[path] = r.read().decode()

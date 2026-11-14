@@ -70,30 +70,30 @@ def ask(port, path, method="GET", headers=None, body=None):
 
 def login(p, port) -> dict:
     status, h, _ = ask(port, "/login", "POST", {"Content-Type": "application/x-www-form-urlencoded"},
-                       f"token={token(p)}&next=/subjects")
-    assert status == 303 and h["Location"] == "/subjects" and "HttpOnly" in h["Set-Cookie"]
+                       f"token={token(p)}&next=/items")
+    assert status == 303 and h["Location"] == "/items" and "HttpOnly" in h["Set-Cookie"]
     return {"Cookie": h["Set-Cookie"].split(";")[0], "Accept": "text/html"}
 
 
 def test_login_is_required(site):
     p, port = site
     assert ask(port, "/health")[0] == 200
-    status, h, _ = ask(port, "/subjects?page=1", headers={"Accept": "text/html"})
-    assert status == 303 and h["Location"] == "/login?next=%2Fsubjects%3Fpage%3D1"
-    assert ask(port, "/api/subjects")[0] == 401
+    status, h, _ = ask(port, "/items?page=1", headers={"Accept": "text/html"})
+    assert status == 303 and h["Location"] == "/login?next=%2Fitems%3Fpage%3D1"
+    assert ask(port, "/api/items")[0] == 401
     assert ask(port, "/core", headers={"Cookie": "orchestra_t=v1.99999999999.forged"})[0] == 401
     assert "Token" in ask(port, "/login")[2]
-    assert ask(port, "/api/subjects", headers={"Authorization": f"Bearer {token(p)}"})[0] == 200
+    assert ask(port, "/api/items", headers={"Authorization": f"Bearer {token(p)}"})[0] == 200
     assert ask(port, "/login", "POST", {"Origin": "http://elsewhere.example"}, "token=x")[0] == 403
     for _ in range(5):
-        assert ask(port, "/api/subjects", headers={"Authorization": "Bearer wrong"})[0] == 401
-    assert ask(port, "/api/subjects", headers={"Authorization": "Bearer wrong"})[0] == 429
+        assert ask(port, "/api/items", headers={"Authorization": "Bearer wrong"})[0] == 401
+    assert ask(port, "/api/items", headers={"Authorization": "Bearer wrong"})[0] == 429
 
 
 def test_each_page_renders(site):
     p, port = site
     h = login(p, port)
-    pages = {path: ask(port, path, headers=h) for path in ("/", "/subjects", "/machines", "/dynamics", "/core")}
+    pages = {path: ask(port, path, headers=h) for path in ("/", "/items", "/machines", "/dynamics", "/core")}
     assert all(s == 200 for s, _, _ in pages.values()), {k: v[0] for k, v in pages.items()}
     dash = pages["/"][2]
     assert "Waiting on you" in dash and "ABC-3" in dash and "$0.50" in dash and "Recent runs" in dash
@@ -114,28 +114,28 @@ def test_each_page_renders(site):
 def test_subjects_page_done_hidden_paged_and_waiting(site):
     p, port = site
     h = login(p, port)
-    _, _, first = ask(port, "/subjects", headers=h)          # the overview: a table per kind, the newest of each
-    assert "28 open subjects" in first and "tracker.issue" in first and "the newest 10" in first and "ABC-4" not in first
+    _, _, first = ask(port, "/items", headers=h)          # the overview: a table per kind, the newest of each
+    assert "28 open items" in first and "tracker.issue" in first and "the newest 10" in first and "ABC-4" not in first
     assert "ABC-7" not in first, "done by its first view that says so (triage), not by latest"
-    _, _, kind1 = ask(port, "/subjects?kind=tracker.issue", headers=h)   # one kind: all of it, paged
-    assert "1-25 of 28 open subjects" in kind1 and "older" in kind1 and "owner" in kind1 and "bo" in kind1
-    _, _, second = ask(port, "/subjects?kind=tracker.issue&page=1", headers=h)
+    _, _, kind1 = ask(port, "/items?kind=tracker.issue", headers=h)   # one kind: all of it, paged
+    assert "1-25 of 28 open items" in kind1 and "older" in kind1 and "owner" in kind1 and "bo" in kind1
+    _, _, second = ask(port, "/items?kind=tracker.issue&page=1", headers=h)
     assert "26-28 of 28" in second and "newer" in second
-    _, _, closed = ask(port, "/subjects?closed=1&page=0", headers=h)
-    assert "30 subjects" in closed and "ABC-4" in closed and "done" in closed
-    status, _, one = ask(port, "/subjects?show=ABC-3", headers=h)
+    _, _, closed = ask(port, "/items?closed=1&page=0", headers=h)
+    assert "30 items" in closed and "ABC-4" in closed and "done" in closed
+    status, _, one = ask(port, "/items?show=ABC-3", headers=h)
     assert status == 200 and "waits on <b>owner</b>" in one and "tracker.issue.blocked" in one and "<h2>Facts</h2>" in one
-    status, _, five = ask(port, "/subjects?show=ABC-5", headers=h)
+    status, _, five = ask(port, "/items?show=ABC-5", headers=h)
     assert "waits on <b>bo</b>" in five and "<h2>triage</h2>" in five, "the triage view first, in config order"
-    assert ask(port, "/subjects?show=NOPE", headers=h)[0] == 404
-    data = json.loads(ask(port, "/api/subjects?closed=1", headers=h)[2])
+    assert ask(port, "/items?show=NOPE", headers=h)[0] == 404
+    data = json.loads(ask(port, "/api/items?closed=1", headers=h)[2])
     assert data["total"] == 30
 
 
 def test_the_pages_are_read_only(site):
     p, port = site
     h = login(p, port)
-    assert ask(port, "/subjects", "POST", h, "")[0] == 405
+    assert ask(port, "/items", "POST", h, "")[0] == 405
     status, hh, _ = ask(port, "/logout", "POST", h, "")
     assert status == 303 and "Max-Age=0" in hh["Set-Cookie"]
 
@@ -149,7 +149,7 @@ def test_the_owner_asks_for_a_task_and_replies_on_it(site):
     assert ask(port, "/tasks", "POST", form | {"Origin": "http://elsewhere.example"}, "text=hi")[0] == 403
     assert ask(port, "/tasks", "POST", form, "text=+++")[0] == 400
     status, hh, _ = ask(port, "/tasks", "POST", form, "text=Add+a+README")
-    assert status == 303 and hh["Location"].startswith("/subjects?show=task%2F")
+    assert status == 303 and hh["Location"].startswith("/items?show=task%2F")
     subject = hh["Location"].split("show=")[1].replace("%2F", "/")
     (asked,) = [f for f in Events.for_project(p).all(0) if f.get("subject") == subject]
     assert asked["type"] == "owner.task.requested" and asked["source"] == "owner" and asked["data"]["text"] == "Add a README"
@@ -158,3 +158,11 @@ def test_the_owner_asks_for_a_task_and_replies_on_it(site):
     assert ask(port, "/tasks", "POST", form, f"text=yes&subject={subject}")[0] == 303
     assert ask(port, "/tasks", "POST", form, "text=yes&subject=ABC-1")[0] == 400
     assert [f["type"] for f in Events.for_project(p).all(0) if f.get("subject") == subject] == ["owner.task.requested", "owner.task.replied"]
+
+
+def test_the_old_subjects_page_moved_to_items(site):
+    p, port = site
+    h = login(p, port)
+    status, hh, _ = ask(port, "/subjects?show=ABC-3", headers=h)
+    assert status == 301 and hh["Location"] == "/items?show=ABC-3"
+    assert ask(port, "/api/subjects", headers=h)[1]["Location"] == "/api/items"

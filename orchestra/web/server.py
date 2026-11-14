@@ -33,8 +33,8 @@ def views(project):
     """path -> (title, data(query), html(data))."""
     return {
         "/": ("Dashboard", lambda q: data.dashboard(project), pages.dashboard),
-        "/subjects": ("Subjects", lambda q: data.subjects(project, _int(q, "page"), 25, (q.get("closed") or ["0"])[0] == "1",
-                                                          (q.get("kind") or [""])[0] or None), pages.subjects),
+        "/items": ("Items", lambda q: data.items(project, _int(q, "page"), 25, (q.get("closed") or ["0"])[0] == "1",
+                                                          (q.get("kind") or [""])[0] or None), pages.items),
         "/machines": ("Machines", lambda q: data.machines(project), pages.machines),
         "/dynamics": ("Dynamics", lambda q: data.dynamics(project), pages.dynamics),
         "/core": ("Core", lambda q: data.core(project), pages.core),
@@ -112,13 +112,15 @@ def handler(project):
                     return self._json(401, {"error": "log in at /login, or send Authorization: Bearer <token>"})
                 return self._send(303, "", headers={"Location": f"/login?next={quote(self.path, safe='')}"})
             path = "/" if u.path in ("/api/dashboard", "/api/") else u.path.removeprefix("/api")
-            if path == "/subjects" and q.get("show"):
-                found = data.subject(project, q["show"][0])
+            if path == "/subjects":                 # the old name of the Items page
+                return self._send(301, "", headers={"Location": ("/api" if api else "") + "/items" + (f"?{u.query}" if u.query else "")})
+            if path == "/items" and q.get("show"):
+                found = data.item(project, q["show"][0])
                 if found is None:
-                    return self._send(404, pages.layout(project, "/subjects", "Subjects", "<p>no such subject</p>"))
+                    return self._send(404, pages.layout(project, "/items", "Items", "<p>no such item</p>"))
                 if api:
                     return self._json(200, found)
-                return self._send(200, pages.layout(project, "/subjects", found["subject"], pages.subject(found)))
+                return self._send(200, pages.layout(project, "/items", found["subject"], pages.item(found)))
             if path not in routes:
                 return self._send(404, pages.layout(project, "", "Not found", "<p>no such page</p>"))
             title, get, html = routes[path]

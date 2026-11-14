@@ -72,9 +72,9 @@ def test_emit_and_query_facts_views_runs(make_project, capsys, monkeypatch):
 
 def test_the_old_query_names_are_refused_with_the_new(make_project, capsys):
     make_project()
-    for old, new in (("events", "facts"), ("items", "views")):
-        assert main(["--repo", str(make_project.repo), "query", old]) == 2
-        assert f"now orchestra query {new}" in capsys.readouterr().err
+    assert main(["--repo", str(make_project.repo), "query", "events"]) == 2
+    assert "now orchestra query facts" in capsys.readouterr().err
+    assert main(["--repo", str(make_project.repo), "query", "items"]) == 0   # items again: the same as views
 
 
 def test_emit_in_a_run_is_stamped_with_its_cause(make_project, capsys, monkeypatch):

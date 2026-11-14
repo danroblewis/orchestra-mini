@@ -84,18 +84,19 @@ A fact is something a `source` asserts about a `subject`, true as of its `time`;
 edited (a correction is a new fact). Its type's verb says which: an **event**, that something
 happened (`jira.issue.status_changed`); an **observation**, that something was so when looked at
 (`jira.issue.observed`); a **decision**, that a machine or person judged something
-(`ci_triage.real`). The keys: `type` (required, `<system>.<noun>.<verb>`); `subject`, what it is
-about, named as its own system names it (`ABC-123`, `acme/api/pull/3`; other things it concerns are
+(`ci_triage.real`). The keys: `type` (required, `<system>.<noun>.<verb>`); `subject`, the **item**
+it is about (a ticket, a pull request, a task: whatever the facts about one id fold up into), named
+as its own system names it (`ABC-123`, `acme/api/pull/3`; other things it concerns are
 named in `data` by their ids); `source`, who asserts it (default the machine; people are
 `person.<system>.<account>`); `id`, stable per change (a fact whose id the bus has is dropped;
 default a hash of the line); `time`, when the source says it was true (RFC 3339, default now);
-`kind`, what the subject is (default the type less its verb: `github.pr`); `data`, the record as
+`kind`, what the item is (default the type less its verb: `github.pr`); `data`, the record as
 the source gives it (Orchestra reads it only for `latest`); `causedby`, the id of the fact that
 caused it, when the line knows better than Orchestra (section 3).
 `{"type": "orchestra.actor", "source": …, "data": {"name": …}}` names an actor for the pages.
 
 A **repeat** is an observation whose `data` (canonical JSON) equals the previous fact's with the
-same subject, type and source, in log order. Publishing skips one when it can tell (counted as
+same item, type and source, in log order. Publishing skips one when it can tell (counted as
 `repeats` on the run record), and every path by which facts reach a projection, a machine or a
 query skips any that got past, and gives each fact its `seq`, its position in the log. So a poller
 may print the whole current state on every run and keep no state of its own. A repeat still says
@@ -134,9 +135,9 @@ A machine never gets its own facts. Every run gets `ORCHESTRA_MACHINE` and `ORCH
 (its name, what `orchestra emit` publishes as), `ORCHESTRA_CONTINUOUS` (`1` when continuous),
 `ORCHESTRA_PROJECT`, `ORCHESTRA_REPO` and `ORCHESTRA_RUN`, in the owner's environment, unstripped.
 A once run for a fact also gets `ORCHESTRA_FACT` (the fact) and `ORCHESTRA_VIEWS_FILE`, a file of
-`{projection: view}` for its subject (`latest` included, and a whole projection's view when its key
-is the subject), kept as `runs/<id>.views.json` (the newest 500) so the views a run saw stay
-readable; before the run starts its subject's per-subject views are built to at least its fact,
+`{projection: view}` for its item (`latest` included, and a whole projection's view when its key
+is the item), kept as `runs/<id>.views.json` (the newest 500) so the views a run saw stay
+readable; before the run starts its item's per-item views are built to at least its fact,
 and whole views are read as built, with `behind`. For one release `ORCHESTRA_EVENT` is still set,
 and `ORCHESTRA_ITEM` holds `latest` without `by_type`, plus `events` (the count), empty past 32 KB.
 
@@ -159,7 +160,7 @@ Two programs come with Orchestra, named in `command`; they read stdin and write 
 
 - `orchestra agent <prompt file> [--model M] [--per-day-usd N]`: Claude Code (`claude -p`, with
   the owner's login, shell and credentials, `--dangerously-skip-permissions`) on the prompt file
-  and each fact with its subject: the subject's last 10 facts, one per line, each view other than
+  and each fact with its item: the item's last 10 facts, one per line, each view other than
   `latest` in full up to 2 KB (else named only, 8 KB in all), and `latest`'s `fields` and `last`,
   with the views file and `orchestra query facts --subject S` named for the rest. Once: one turn
   per fact. Continuous: one stream-json session, each fact a user message, so it keeps its
@@ -169,7 +170,7 @@ Two programs come with Orchestra, named in `command`; they read stdin and write 
   in scripts beside it that it runs.
 - `orchestra decide "<question>" --answers a,b,c [--inputs proj:field,field] [--min-confidence 0.6]
   [--model M]`: one model call per fact with the question, the fact and the `inputs` of its
-  subject's views (`ticket:status` is the `ticket` projection's `status`, a bare `status` is
+  item's views (`ticket:status` is the `ticket` projection's `status`, a bare `status` is
   `latest`'s `fields.status`; default all of `latest`'s fields); it prints `decision.made`
   (`answer`, `confidence`, a one-line `reason`) and `<machine>.<answer>` (so `on: [ci_triage.real]`
   reads plainly), and a run line. Below `--min-confidence` the answer is `unsure`.
@@ -243,17 +244,17 @@ itself, and keeps running until its stdin closes. Try it by hand:
 The bus counter keeps its name, `orchestra_events_total`, and counts facts.
 
 Pages, read only but for one box: **Dashboard** (a box for a task, what waits on the owner, open
-subjects, recent runs, spend),
-**Subjects** (each subject's facts and views), **Machines** (every machine and source, what each
+items, recent runs, spend),
+**Items** (each item's facts and views), **Machines** (every machine and source, what each
 publishes and listens for, runs), **Dynamics** (the model), **Core** (bus, metrics store, stores,
 machines, each projection's last build, held facts: health and recent errors). The Dashboard and
-Subjects take `waiting_on` and `done` from a subject's first view, in config order, that has the key
+Items take `waiting_on` and `done` from an item's first view, in config order, that has the key
 at its top level, else from `latest` (`fields.waiting_on`, `done`).
 
 **Tasks.** The Dashboard's box is how the owner asks for work with no config at all. What they type
-becomes one fact from source `owner`: `owner.task.requested` on a new subject `task/<id>`, with
+becomes one fact from source `owner`: `owner.task.requested` on a new item `task/<id>`, with
 `data` `text`, `title` (its first line) and `waiting_on: worker`. A task's page has a box for a reply,
-`owner.task.replied` on the same subject. The built-in machine `worker` (`orchestra agent` with
+`owner.task.replied` on the same item. The built-in machine `worker` (`orchestra agent` with
 the packaged `orchestra/tasks/worker.md`) listens for both, unless the config names a machine
 `worker` of its own: it does the task in the repository, commits what it changed (never pushes),
 and says `worker.task.completed` (`summary`, `commits`, `waiting_on: null`), `worker.task.asked`
@@ -279,16 +280,16 @@ projections:
     command: .orchestra/ticket_prs.py
 ```
 
-Each build is one run of the command. Its stdin is every fact of the subjects being built (all
-matching subjects the first time, then only those with new facts), in log order, each with its
-`seq`; it prints one JSON line per subject, `{"subject": …, …}`. One that needs the source's order
+Each build is one run of the command. Its stdin is every fact of the items being built (all
+matching items the first time, then only those with new facts), in log order, each with its
+`seq`; it prints one JSON line per item, `{"subject": …, …}`. One that needs the source's order
 sorts by `time`. A `whole: true` projection gets every matching fact on each build and prints one
 line per key it chooses (`{"key": …}`); its build replaces its views as a set, so a key it no
 longer prints is gone. A projection reads only its stdin (it is run with no environment but `PATH`,
 `HOME` and the locale) and prints times, not ages, so it can be rerun at will. Any command will do
 (`duckdb -jsonlines -c "<query>"` too).
 
-**`latest`**, built in, covers every subject, in Orchestra's own process: `fields`, every key of
+**`latest`**, built in, covers every item, in Orchestra's own process: `fields`, every key of
 every fact's `data`, the latest fact winning, `null` removing a key; `by_type`, the latest fact's
 `data` of each type; `type`, the latest fact's; `first` and `last`, the times of the first and latest
 facts; `kind` (section 2); `facts`, how many; `done`, true once the latest type's verb is
@@ -302,8 +303,8 @@ entry, the script `command` names and the modules beside it that it imports (non
 command), and Orchestra's version. A changed hash rebuilds it from the log; `orchestra query views --rebuild`
 forces it. `orchestra run` builds after each batch of facts; a page or `query` builds only when no
 runner is alive. Every view carries `behind`: how many matching facts have a `seq` past `built_to`
-(for a per-subject view, its subject's only). Routing facts to machines never waits for a build, and
-a build triggers no machine. A subject the program printed no line for, or a run that failed or
+(for a per-item view, its item's only). Routing facts to machines never waits for a build, and
+a build triggers no machine. An item the program printed no line for, or a run that failed or
 timed out, keeps its last good view with `error` and `error_at`, never `latest` in its place.
 
 ## 7. The model
