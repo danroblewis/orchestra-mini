@@ -47,8 +47,8 @@ uv tool install --force 'orchestra[sd] @ git+https://github.com/danroblewis/orch
 
 ```bash
 cd <your repository>
-orchestra chat         # the Supervisor: with no config it sets the project up (or: orchestra chat "watch our Jira");
-                       # then it answers about what is happening, changes things, clears the data; --continue resumes
+orchestra chat         # the Supervisor: ask it about what is happening, or to change things (orchestra chat "watch our Jira");
+                       # it clears the data when asked; --continue resumes
 orchestra run --web    # checks the config, runs every machine, serves the pages; Ctrl-C stops it
 orchestra emit '{"type": "deploy.release.done", "subject": "v1.4"}'
 orchestra query views  # also: facts, check, metrics, model, runs, or '<promql>' [--store NAME]

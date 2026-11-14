@@ -2,10 +2,9 @@
 "Orchestra is supposed to provide a setup agent that does this for me. I should be able to write the
 file by hand, read it, maintain it, but I don't want to write the file or the scripts.")
 
-It runs ``claude`` interactively with a brief and the spec appended to its system prompt: ``setup.md``
-when there is no config yet or it doesn't load, else ``chat.md`` with what is happening now (and, for a
-config written for an earlier Orchestra, what to rewrite: ``MIGRATE``). Both get
-what is already here: the config's path and text, what ``orchestra run`` would say of it, the
+It runs ``claude`` interactively with a brief and the spec appended to its system prompt: ``chat.md``
+with what is happening now (and, for a config written for an earlier Orchestra, what to rewrite:
+``MIGRATE``), and what is already here: the config's path and text, what ``orchestra run`` would say of it, the
 environment variables that look like credentials (by name only), ``gh``'s login state, and how to
 run Orchestra's own commands (``orchestra``, and the reset, ``<python> -m orchestra.reset``)."""
 
@@ -75,34 +74,33 @@ def context(project) -> str:
 
 
 def now(project) -> str:
-    """What is happening: open subjects, the latest runs and facts, in a few lines."""
+    """What is happening: open items, the latest runs and facts, in a few lines."""
     root = project.repo
     o = [sys.executable, "-m", "orchestra", "--repo", str(root)]
-    parts = [("open subjects", o + ["query", "views", "-n", "15"]), ("latest runs", o + ["query", "runs"]),
+    parts = [("open items", o + ["query", "views", "-n", "15"]), ("latest runs", o + ["query", "runs"]),
              ("latest facts", o + ["query", "facts", "-n", "15"])]
     return "# What is happening now\n\n" + "\n".join(f"## {t}\n```\n{_run(cmd, root)[:2500]}\n```" for t, cmd in parts)
 
 
-def prompt(project, brief: str = "setup.md", migrate: str | None = None) -> str:
-    pieces = [(HERE / brief).read_text(encoding="utf-8"), (HERE / "code.md").read_text(encoding="utf-8"), context(project)]
+def prompt(project, migrate: str | None = None) -> str:
+    pieces = [(HERE / "chat.md").read_text(encoding="utf-8"), (HERE / "code.md").read_text(encoding="utf-8"), context(project)]
     if migrate:
         pieces.insert(1, MIGRATE.format(why=migrate))
-    elif brief == "chat.md":
+    else:
         pieces.append(now(project))
     return "\n\n".join(pieces + ["# SPEC.md\n\n" + (HERE / "SPEC.md").read_text(encoding="utf-8")])
 
 
-def run(project, message: str | None, print_only: bool = False, binary: str = "claude", brief: str = "setup.md",
+def run(project, message: str | None, print_only: bool = False, binary: str = "claude",
         resume: bool = False, migrate: str | None = None) -> int:
     """Claude Code, interactive, briefed; ``resume`` carries on the last session in this folder."""
     if not shutil.which(binary):
         print(f"orchestra needs Claude Code ({binary}) on PATH: https://docs.claude.com/en/docs/claude-code", file=sys.stderr)
         return 2
-    text = prompt(project, brief, migrate)
+    text = prompt(project, migrate)
     if print_only:
         print(text)
         return 0
-    first = message or ("Set Orchestra up for this project. Start by asking me what I want it to watch and do."
-                        if brief == "setup.md" else "Rewrite the config for this Orchestra." if migrate else None)
+    first = message or ("Rewrite the config for this Orchestra." if migrate else None)
     cmd = [binary, *(["--continue"] if resume else []), "--append-system-prompt", text, *([first] if first else [])]
     return subprocess.call(cmd, cwd=project.repo)

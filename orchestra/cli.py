@@ -50,16 +50,13 @@ def cmd_run(args) -> int:
 
 
 def cmd_chat(args) -> int:
-    """The Supervisor; with no config yet, or one that doesn't load, briefed to set the project up;
-    with one written for an earlier Orchestra, briefed to rewrite it."""
+    """The Supervisor; with a config written for an earlier Orchestra, briefed to rewrite it."""
     from . import setup
     from .config import Config
     from .project import Project
-    brief, migrate = "chat.md", None
+    migrate = None
     try:
         project = load(args.repo)
-        if not project.files:
-            brief = "setup.md"
     except ConfigError as e:
         root = (args.repo or repo_root()).resolve()
         project = Project(root.name, root, Config(), [])
@@ -68,9 +65,8 @@ def cmd_chat(args) -> int:
             print(f"orchestra chat: the config was written for an earlier Orchestra ({e}); the Supervisor rewrites it",
                   file=sys.stderr)
         else:
-            brief = "setup.md"
-            print(f"orchestra chat: the config does not load yet ({e}); setting it up", file=sys.stderr)
-    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt, brief=brief, resume=args.resume,
+            print(f"orchestra chat: the config does not load ({e})", file=sys.stderr)
+    return setup.run(project, " ".join(args.message) or None, print_only=args.print_prompt, resume=args.resume,
                      migrate=migrate)
 
 

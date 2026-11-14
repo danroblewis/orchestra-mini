@@ -221,12 +221,13 @@ itself, and keeps running until its stdin closes. Try it by hand:
   endpoint and its token, and runs every machine; `--web` also serves the pages and prints their
   login link.
 - `orchestra chat [message] [--continue]`: the Supervisor, a Claude Code session in the repository
-  briefed with this spec and what is set up. With no config yet, or one that doesn't load, it sets
-  the project up (writes the config, its scripts, projections and prompts, and proves them); with
-  one written for an earlier Orchestra (`items:`), it rewrites it; otherwise it answers about
-  Orchestra and what is happening, changes it, and clears the data when asked
+  briefed with this spec and what is set up. It answers about Orchestra and what is happening,
+  changes it when asked (the config, its scripts, projections and prompts, proved by running
+  them), and clears the data when asked
   (`python -m orchestra.reset --yes`: the bus, metrics, views, runs, logs and model; never the
-  config, tokens or scripts). `--continue` carries on the last session.
+  config, tokens or scripts); with a config written for an earlier Orchestra (`items:`), it
+  rewrites it first. With no config it sets nothing up of its own accord. `--continue` carries on
+  the last session.
 - `orchestra emit '<json>'`: one fact or metric line, as `ORCHESTRA_SOURCE` (default `cli`).
 - `orchestra query facts [-n N] [--type T] [--subject S] [--trace ID]` (`--trace` walks `causedby`
   both ways); `query views [PROJECTION] [show SUBJECT] [--input SUBJECT] [--rebuild]` (`--input`
